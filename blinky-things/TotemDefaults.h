@@ -1,0 +1,47 @@
+#pragma once
+#include <stdint.h>
+
+namespace Defaults {
+  // ---- Audio mapping (used by fire-totem + SerialConsole) ----
+  constexpr float NoiseGate   = 0.06f;
+  constexpr float Gamma       = 0.60f;
+  constexpr float GlobalGain  = 1.35f;
+  constexpr float AttackSeconds   = 0.08f;   // seconds
+  constexpr float ReleaseSeconds  = 0.30f;   // seconds
+  constexpr uint16_t TransientCooldownMs = 500;
+
+  // ---- Performance constants ----
+  constexpr float WindSparkFactor = 0.12f;
+  constexpr float MaxWindSparkProb = 0.35f;
+  constexpr float CoolingScaleFactor = 0.5f / 255.0f;
+
+  // ---- Software auto-gain (fast) ----
+  // Keeps typical normalized level near target across tracks/rooms.
+  constexpr float AutoGainTarget   = 0.55f;  // aim to use ~55% of visual range
+  constexpr float AutoGainStrength = 0.025f; // integrator step (per second)
+  constexpr float AutoGainMin      = 0.60f;  // clamp on mic.globalGain
+  constexpr float AutoGainMax      = 2.00f;
+
+  // ---- Fire engine params (used by FireEffect + SerialConsole) ----
+  constexpr uint8_t BaseCooling         = 85;
+  constexpr uint8_t SparkHeatMin        = 40;
+  constexpr uint8_t SparkHeatMax        = 200;
+  constexpr float   SparkChance         = 0.32f;
+  constexpr float   AudioSparkBoost     = 0.3f;
+  constexpr uint8_t AudioHeatBoostMax   = 60;
+  constexpr int8_t  CoolingAudioBias    = -20;   // negative => taller flames on loud parts
+  constexpr uint8_t BottomRowsForSparks = 1;
+  constexpr uint8_t TransientHeatMax = 100; // 0-255
+
+  // (optional) Ranges you show in help strings
+  namespace Ranges {
+    constexpr float NoiseGateMin = 0.0f, NoiseGateMax = 0.5f;
+    constexpr float GammaMin     = 0.2f, GammaMax     = 2.5f;
+    constexpr float GainMin      = 0.0f, GainMax      = 5.0f;
+    constexpr float AttackMin    = 0.005f, AttackMax  = 1.0f;
+    constexpr float ReleaseMin   = 0.02f,  ReleaseMax = 2.0f;
+
+    constexpr uint8_t CoolingMin = 0, CoolingMax = 255;
+    constexpr float   SparkChanceMin = 0.0f, SparkChanceMax = 1.0f;
+  }
+}
