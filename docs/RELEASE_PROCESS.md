@@ -104,13 +104,13 @@ Without a bench-gate record, Promote writes `gate-staging.json` to the release: 
 
 Refuses without a passing gate record for this exact version. It then dispatches `sign-release.yml`, which signs the release for signed OTA (the raw image `blinky-things-bN.bin` and its Ed25519-signed manifest `.otam`) and re-checks the gate. The workflow runs only from master. The key, `BLINKY_RELEASE_SIGNING_KEY`, is a secret of the GitHub environment `release-signing` (master only) and is used nowhere else. It waits for the run, and verifies the signature against the key in `blinky-things/ota/OtaKeys.h`. Only then does it tag `stable-bN` and mark the release stable and *Latest*.
 
-Promotion then dispatches a blinky-console redeploy (`gh workflow run blinky-console-deploy.yml`). That deploy mirrors the newest stable releases for the web flasher (`#firmware`, [WEB_FLASHER.md](WEB_FLASHER.md)), so personal devices are offered `bN` by default.
+Promotion then dispatches a blinky-console redeploy in blinky_time (`gh workflow run blinky-console-deploy.yml -R Jdubz/blinky_time`; it also runs daily). That deploy mirrors the newest stable releases for the web flasher (`#firmware`, [WEB_FLASHER.md](WEB_FLASHER.md)), so personal devices are offered `bN` by default.
 
 ### Rollback
 ```bash
 python tools/release_promote.py bM --rollback    # bM: an earlier stable release
 ```
-Re-marks `bM` as *Latest*. Nothing is rebuilt; the next deploy installs `bM`. It also dispatches a blinky-console redeploy, so the web flasher's default follows. **After deleting a release by hand**, run `gh workflow run blinky-console-deploy.yml --ref master` yourself: tag and release events run the *tagged* commit's workflow file, which for an older release may not have the trigger.
+Re-marks `bM` as *Latest*. Nothing is rebuilt; the next deploy installs `bM`. It also dispatches a blinky-console redeploy, so the web flasher's default follows. **After deleting a release by hand**, run `gh workflow run blinky-console-deploy.yml -R Jdubz/blinky_time` yourself (or wait for its daily run): this repo's release events don't reach blinky_time.
 
 ## Deploying
 
