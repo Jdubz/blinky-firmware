@@ -5,3 +5,4 @@
 [submodule "corpus"]
 	path = corpus
 	url = https://github.com/Jdubz/blinky-corpus.git
+	branch = main

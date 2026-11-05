@@ -1,0 +1,15 @@
+# Pin bumps for the corpus/ submodule (blinky_time#357): each is a PR to staging, so the
+# tracker harness's corpus gate runs against the new labels before they reach a build.
+# bootloader/src is pinned by hand to the fleet's known-good bootloader (CLAUDE.md,
+# "Bootloader changes"), so it is never bumped automatically.
+version: 2
+updates:
+  - package-ecosystem: gitsubmodule
+    directory: /
+    target-branch: staging
+    schedule:
+      interval: daily
+    ignore:
+      - dependency-name: bootloader/src
+    commit-message:
+      prefix: "submodules"
