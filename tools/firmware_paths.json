@@ -1,0 +1,19 @@
+{
+  "_doc": "Paths that change what is built and flashed (blinky_time#349 follow-up). A staging head with no change under these since master skips the box's hardware test, and a master commit with none since the last bN cuts no candidate. A path ending in / is a directory prefix. Read by .github/workflows/release.yml and by blinky_time's scripts/testbox/staging.py, at the commit being judged. When in doubt, add the path: a missed one ships untested firmware.",
+  "paths": [
+    "blinky-things/",
+    "bootloader/",
+    "patches/",
+    "tools/firmware_toolchain.json",
+    "tools/setup_tflite_lib.sh",
+    "tools/check_build_libs.py",
+    "tools/firmware_paths.json",
+    "scripts/build.sh",
+    "scripts/setup_toolchain.sh",
+    "scripts/apply_core_patches.sh",
+    "scripts/arduino_env.sh",
+    "scripts/gen_version.sh",
+    ".github/workflows/staging-build.yml",
+    ".github/workflows/release.yml"
+  ]
+}
