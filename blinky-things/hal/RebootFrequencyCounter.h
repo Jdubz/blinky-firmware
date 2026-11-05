@@ -37,7 +37,11 @@
  *   2. If a fault boot pushes the counter >= REBOOT_THRESHOLD, enters BLE DFU
  *      bootloader via SafeBootWatchdog. Never returns.
  *   3. `tickStable()` is called from loop() once millis() >= STABLE_UPTIME_MS.
- *      Writes counter=0 to flash.
+ *      Clears the counter on flash, only if it isn't 0 already (every healthy
+ *      boot), and then from a lowest-priority task, never the loop: a flash
+ *      write waits on the SoftDevice for timeslots and blocked the loop for
+ *      ~1.1 s at 5 min of uptime (blinky-firmware#4, the same stall #191
+ *      removed from settings saves).
  *
  * Failure modes (deliberately fail-safe):
  *   - File missing or unreadable → counter treated as 0 → device boots
@@ -146,8 +150,13 @@ namespace RebootFrequencyCounter {
 
     // Module-local state — `static` gives internal linkage; safe because only
     // .ino includes this header (matches the SafeBootWatchdog pattern).
-    static bool stableMarked_ = false;
+    // Set by the clear task, read by loop(): volatile.
+    static volatile bool stableMarked_ = false;
+    static bool clearStarted_ = false;
     static uint8_t bootCount_ = 0;   // for diagnostics
+    // What this boot left on flash (0 when the file is missing or corrupt,
+    // which reads back as 0). tickStable() skips the clear when it's 0.
+    static uint8_t flashCounter_ = 0;
     static uint32_t lastResetReason_ = 0;  // RESETREAS captured this boot (diagnostics)
 
     /**
@@ -252,6 +261,7 @@ namespace RebootFrequencyCounter {
     inline void checkAndIncrement() {
         lastResetReason_ = bootResetReason();
         bootCount_ = readCounter();
+        flashCounter_ = bootCount_;
 
         // Crash-loop gate: only a genuine fault reset (watchdog / lockup)
         // counts. A clean power-on, brownout, pin reset, or operator
@@ -296,10 +306,13 @@ namespace RebootFrequencyCounter {
             // clear during tickStable(), and if the bug persists we'll hit
             // threshold again on the next cycle.
             if (!writeCounter(0)) {
+                // flashCounter_ stays non-zero: what's on flash is unknown
+                // after a failed write, so tickStable() retries the clear.
                 Serial.println(F("[FALLBACK] RebootFrequencyCounter: clear failed, "
                                  "skipping DFU recovery this boot to avoid permanent loop"));
                 return;
             }
+            flashCounter_ = 0;
             // Invite the caller (typically the .ino) to quarantine state
             // that may have caused the crash-loop — e.g., the stored device
             // config — before we hand control to the DFU bootloader. Best-
@@ -317,6 +330,9 @@ namespace RebootFrequencyCounter {
         // Direction of error is "safe" (we err on the side of NOT entering
         // DFU recovery), but the operator deserves a loud notice that the
         // crash-loop detector is running degraded.
+        // On failure what's on flash is unknown; treat it as non-zero so
+        // tickStable() still clears it.
+        flashCounter_ = static_cast<uint8_t>(next);
         if (!writeCounter(next)) {
             Serial.println(F("[FALLBACK] RebootFrequencyCounter: counter persist "
                              "failed — crash-loop detection degraded this boot"));
@@ -327,27 +343,63 @@ namespace RebootFrequencyCounter {
         Serial.println(REBOOT_THRESHOLD);
     }
 
-    /**
-     * Call from loop() every iteration; idempotent. Clears the counter once
-     * the device has been up for `STABLE_UPTIME_MS`.
-     *
-     * Only marks the in-RAM "done" flag when the flash write succeeds —
-     * otherwise a transient LittleFS error would permanently disarm the
-     * stable-clear path for this power session, and the counter would carry
-     * forward to the next boot at a higher-than-expected value.
-     */
-    inline void tickStable(uint32_t nowMs) {
-        if (stableMarked_) return;
-        if (nowMs < STABLE_UPTIME_MS) return;
-        if (!writeCounter(0)) {
-            // Don't set stableMarked_; we'll retry on the next loop iteration.
-            // writeCounter() already logged the failure path.
-            return;
-        }
-        stableMarked_ = true;
+    inline void logCleared() {
         Serial.print(F("[BOOT] RebootFrequencyCounter cleared ("));
         Serial.print(STABLE_UPTIME_MS / 60000UL);
         Serial.println(F("min stable uptime)"));
+    }
+
+    // Retry period for a failed clear. Only matters on a degraded filesystem;
+    // retrying every loop iteration would hammer it.
+    static constexpr uint32_t CLEAR_RETRY_MS = 60UL * 1000UL;
+    static uint32_t nextSyncAttemptMs_ = 0;  // the fallback path's next try
+
+    // One-shot clear task. Below the loop task (TASK_PRIO_LOWEST, like the
+    // config writer, #191): it runs only while the loop is blocked, and the
+    // loop preempts it the moment it wakes, so the SoftDevice's flash
+    // timeslot waits never hold a frame. Only marks stable when the write
+    // succeeds, so a transient LittleFS error never disarms the clear for the
+    // power session; it retries until one lands.
+    inline void clearTaskMain(void*) {
+        while (!writeCounter(0)) {
+            // writeCounter() already logged the failure.
+            vTaskDelay(pdMS_TO_TICKS(CLEAR_RETRY_MS));
+        }
+        flashCounter_ = 0;
+        stableMarked_ = true;
+        logCleared();
+        vTaskDelete(nullptr);
+    }
+
+    /**
+     * Call from loop() every iteration; idempotent and non-blocking. Once the
+     * device has been up for `STABLE_UPTIME_MS`, clears the counter:
+     *   - nothing to write when flash already holds 0 (every healthy boot);
+     *   - otherwise the write runs in clearTaskMain, off the loop task.
+     */
+    inline void tickStable(uint32_t nowMs) {
+        if (stableMarked_ || clearStarted_) return;
+        if (nowMs < STABLE_UPTIME_MS) return;
+        if (static_cast<int32_t>(nowMs - nextSyncAttemptMs_) < 0) return;
+        clearStarted_ = true;
+        if (flashCounter_ == 0) {
+            stableMarked_ = true;
+            logCleared();
+            return;
+        }
+        // 1024 words: LittleFS + the SoftDevice flash path (as the config writer).
+        if (xTaskCreate(clearTaskMain, "rfcc", 1024, nullptr, TASK_PRIO_LOWEST, nullptr) != pdPASS) {
+            Serial.println(F("[FALLBACK] RebootFrequencyCounter: clear task not started, "
+                             "clearing on the loop (it stalls frames, blinky-firmware#4)"));
+            if (writeCounter(0)) {
+                flashCounter_ = 0;
+                stableMarked_ = true;
+                logCleared();
+            } else {
+                clearStarted_ = false;  // retry, at most once a CLEAR_RETRY_MS
+                nextSyncAttemptMs_ = nowMs + CLEAR_RETRY_MS;
+            }
+        }
     }
 
     /**
