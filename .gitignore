@@ -68,7 +68,9 @@ previews/
 scratch/
 
 # Pinned, isolated firmware toolchain (scripts/setup_toolchain.sh, #252)
-.arduino/
+# The pinned toolchain: a directory here, or a link to a shared one (the test box links
+# it into blinky_time's firmware/ submodule, blinky_time#357).
+.arduino
 
 # Local scratch: host-test build output and deep-research notes
 /build/

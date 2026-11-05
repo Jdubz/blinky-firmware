@@ -32,7 +32,7 @@ reports, per run:
   bpm       Median BPM after warm-up (look for loop-rate dependence).
 
 Drum metrics, the PRIMARY score (#294, CLAUDE.md: the target is kicks and snares),
-against cleaned `kick_weighted` labels (blinky_server/testing/drum_scoring.py), after
+against cleaned `kick_weighted` labels (blinky-corpus: blinky_scoring/drum_scoring.py), after
 warm-up, one-to-one, with a constant per-run lag removed first:
 
   kR50 kR30 kick recall at +-50 / +-30 ms
@@ -70,8 +70,9 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / "blinky-server"))
-from blinky_server.testing.scoring import (  # noqa: E402
+# The scorers live with the labels, in the corpus submodule (blinky-corpus).
+sys.path.insert(0, str(REPO / "corpus"))
+from blinky_scoring.scoring import (  # noqa: E402
     MIN_ONSET_STRENGTH,
     ONSET_DEDUP_SEC,
     ONSET_TOLERANCE_SEC,
@@ -80,7 +81,7 @@ from blinky_server.testing.scoring import (  # noqa: E402
     estimate_audio_latency,
     match_events_f1,
 )
-from blinky_server.testing.drum_scoring import (  # noqa: E402
+from blinky_scoring.drum_scoring import (  # noqa: E402
     drum_label_path,
     load_drum_labels,
     score_drums,
@@ -89,7 +90,7 @@ from blinky_server.testing.drum_scoring import (  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from consistency import Repetition, consistency, find_repetition  # noqa: E402
 
-CORPUS = REPO / "blinky-test-player" / "music" / "edm"
+CORPUS = REPO / "corpus" / "edm"  # the blinky-corpus submodule
 WARMUP_S = 10.0
 STRONG = 0.8
 TOL_S = 0.05

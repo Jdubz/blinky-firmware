@@ -17,7 +17,7 @@ Each test compiles firmware sources from `blinky-things/` for the host, using th
 |-----------|----------------|--------|------------|
 | `timing/` | Animations and the rhythm phase keep absolute time: one 2 s frame ends where two hundred 10 ms frames would (#259-#261). Built with UBSan. | `Absolute Timing` | Build command at the top of `timing/timing_test.cpp` (same as CI) |
 | `ota/` | The firmware's signed-OTA manifest verifier and the release signer (`tools/ota_manifest.py`) agree byte for byte | `OTA Manifest` | [ota/README.md](ota/README.md) |
-| `tracker/` | The real `AudioTracker` on recorded audio: UBSan stress, frame-rate gate, and a corpus gate on `blinky-test-player/music/edm/`; optionally with the real onset NN | `Tracker Harness`, `Tracker Harness with real onset NN` | [tracker/README.md](tracker/README.md) |
+| `tracker/` | The real `AudioTracker` on recorded audio: UBSan stress, frame-rate gate, and a corpus gate on `corpus/edm/`; optionally with the real onset NN | `Tracker Harness`, `Tracker Harness with real onset NN` | [tracker/README.md](tracker/README.md) |
 | `parity/` | Firmware spectral feature math matches the Python training features | not in CI (run locally); CI's `Feature Parity` job runs only the Python unit tests | [parity/README.md](parity/README.md) |
 
 ### Quick Start

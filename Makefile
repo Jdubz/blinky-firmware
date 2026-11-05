@@ -269,8 +269,3 @@ flash: upload
 serial: monitor
 boards: list-boards
 
-# Label reviewer — launches the multi-corpus label review web UI.
-# Defaults register the training + edm corpora; switch in the UI dropdown.
-.PHONY: reviewer
-reviewer:
-	$(MAKE) -C ml-training reviewer

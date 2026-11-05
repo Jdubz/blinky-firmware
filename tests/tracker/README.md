@@ -52,7 +52,7 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
     [--compare build/tracker_harness_old] [--tracks techno-minimal-01] [--fps 35 60 90]
 ```
 
-- **Corpus:** `blinky-test-player/music/edm/` (the validation corpus).
+- **Corpus:** `corpus/edm/` (the validation corpus).
 - **Ground truth:** `.onsets_consensus.json`, and for the drum metrics `kick_weighted/<track>.kick_weighted.json`, cleaned (kept only where a consensus onset backed by ≥ 2 systems lies within 70 ms).
 - **Decoding:** needs `ffmpeg` on PATH or `pip install imageio-ffmpeg`.
 - **A/B in CI (#340):** `gh workflow run tracker-ab.yml -f opts="--onset-pattern-bias=0"` runs the corpus with the same binary twice, defaults (`old`) and the given options (`new`), and puts both summaries in the run's step summary. It gates nothing; it is for measuring one suspect at a time.
@@ -60,7 +60,7 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 
 ### Metrics
 
-**Drum metrics are the primary score** (#294; CLAUDE.md: the detector targets kicks and snares). They come from `blinky_server/testing/drum_scoring.py`, the same code blinky-server uses to score device runs. They're computed after warm-up with one-to-one matching, after removing a constant per-run lag estimated against the drum labels.
+**Drum metrics are the primary score** (#294; CLAUDE.md: the detector targets kicks and snares). They come from `blinky_scoring/drum_scoring.py` in the corpus submodule (blinky-corpus), the same code blinky-server uses to score device runs. They're computed after warm-up with one-to-one matching, after removing a constant per-run lag estimated against the drum labels.
 
 | Metric | Meaning |
 |---|---|

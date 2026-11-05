@@ -50,7 +50,7 @@ Produces `parity_harness`.
 ```bash
 cd ml-training
 ./venv/bin/python -m analysis.run_parity_test \
-    --audio ../blinky-test-player/music/edm/breakbeat-drive.mp3 \
+    --audio ../corpus/edm/breakbeat-drive.mp3 \
     --harness ../tests/parity/build/parity_harness
 ```
 
