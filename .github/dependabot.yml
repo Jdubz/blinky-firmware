@@ -9,6 +9,9 @@ updates:
     target-branch: staging
     schedule:
       interval: daily
+    # Dependabot otherwise applies its own cooldown and skips commits younger than it.
+    cooldown:
+      default-days: 1
     ignore:
       - dependency-name: bootloader/src
     commit-message:
