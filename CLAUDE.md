@@ -1,8 +1,16 @@
-# Claude Code Instructions for Blinky Project
+# Claude Code Instructions for blinky-firmware
 
-This file contains **critical behavior rules only**. Architecture, status, and historical context live in `docs/` (see the index at the bottom).
+This file contains **critical behavior rules only** for the firmware (nRF52840, `blinky-things/`) and its approval and release flow. Architecture and history live in `docs/`. The tooling (blinky-server, blinky-console, ml-training, the test box) lives in [blinky_time](https://github.com/Jdubz/blinky_time), with its own `CLAUDE.md`. The validation corpus and its scorers live in [blinky-corpus](https://github.com/Jdubz/blinky-corpus), the `corpus/` submodule here.
 
 > ESP32-S3 support was cut March 2026. All active development targets **nRF52840** (the deployed fleet). The **next generation** of fixtures will be built on the XIAO ESP32-S3 Sense, dual-core (renderer on one core, audio listener on the other): see `docs/NEXTGEN_ESP32S3_PLAN.md`. Don't change deployed-fleet code for it.
+
+## Repositories and what crosses between them (blinky_time#357)
+
+- **Releases and staging builds are the contract.** blinky-server, `deploy.sh` and the web flasher consume this repo's GitHub releases (`bN`: hex, uf2, bin, otam, `manifest.json`, gate records) and staging artifacts (`staging-firmware-<sha>`). Don't change the manifest or asset names without a matching blinky_time PR.
+- **Wire protocols** (`json info` fields, `comms/BleProtocol.h`, `comms/RecordStream.h`, `ota/`) are mirrored in blinky-server and blinky-console. A protocol change is a PR here plus a PR there.
+- **blinky_time pins this repo** as its `firmware/` submodule, and runs these `tools/` (release client, hex/UF2 validators, test-device list). A change to them reaches the server only through a submodule bump there.
+- **Model headers** (`blinky-things/audio/*_model_data.h`) come from blinky_time's ml-training. Shipping a model is a PR here.
+- **The corpus** is the `corpus/` submodule. Label or scoring changes are a PR to blinky-corpus, then a bump here.
 
 ## CRITICAL: Upload Safety (nRF52840)
 
@@ -70,7 +78,7 @@ Use `--dry-run` first. If an identity check refuses the drive, the bootloader ti
 
 blinky-server owns all serial/BLE connections — no port contention. See `docs/SAFETY.md` for the full safety model, `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for BLE DFU details.
 
-**The test box's blinky-server runs merged master only.** It runs from `~/blinky-deploy`, a symlink to one of two worktrees detached at master. `blinky-deploy.timer` (`scripts/testbox/deploy.py`) moves it to a new commit only after the commit's CI is green and its PR's last commit has a clean Claude review verdict ("No issues found"). It also has to change one of the server's paths (`SERVER_PATHS`: `blinky-server/`, `blinky-console/`, `tools/`, `devices/`, `blinky-test-player/music/`, `scripts/testbox/`). Any other gated commit only moves `refs/blinky/deployable`, which the Spark training bundle is built from. Anything else is refused unless the owner runs `deploy.py --accept SHA REASON`. The deployer installs into the idle worktree and that slot's systemd units, then stops the server, which drains first (#325): new work is refused, every step or flash in flight finishes (`KillMode=mixed`, so only the server gets the SIGTERM), and durable jobs resume on the new code from their next step. Only then does it move the link and start the server; it switches back if the server comes up unhealthy. To change what the server runs, merge a PR. Never point the service at, or restart it from, the dev clone `~/blinky_time`. State: `deploy.py --status`; log: `journalctl -u blinky-deploy` (`docs/TEST_BOX_BUILD_PLAN.md`, Software setup).
+**The test box** (its blinky-server, deployer and staging runner) is blinky_time's; its rules are in that repo's `CLAUDE.md`. Here, what matters is that the box's staging runner tests this repo's `staging` head and posts the `Hardware test (staging)` status that `master` requires.
 
 **Risky firmware:** always test on unenclosed bare chips first (reset button + SWD pads accessible). Installed devices have no physical access.
 
@@ -98,32 +106,9 @@ blinky-server owns all serial/BLE connections — no port contention. See `docs/
 - Bench measurement: 30/30 PASS at 30s timeout, mean 9.4s per UF2 drop (vs. unbounded hangs on 0.8.0-5).
 See `docs/BOOTLOADER_PRODUCTION_AUDIT_2026_05_15.md` for the diagnostic narrative.
 
-## CRITICAL: Single Flash Entry Point (blinky-server)
+## Flashing through blinky-server
 
-**Inside blinky-server, every flash routes through `FleetManager.flash_device()` → `_run_flash_job` → the guarded write impl. There is exactly one entry point; direct calls to the `_impl` functions are forbidden by design and raise `OutsideFlashJobContextError` at runtime.**
-
-This is the structural fix for the 2026-05-17 cart_inner cascade: the legacy fleet had multiple parallel flash paths (`upload_firmware`, `upload_via_uf2`, `upload_uf2`, `upload_ble_dfu`, plus auto-recovery's separate code), each maintaining its own dedup state. A UF2 write succeeded but the route's verify timed out, the route then marked it FAILED, and auto-recovery's separate state machine saw "DFU device, not recently flashed" and re-flashed via BLE-DFU — over a successful UF2 write. Closing every parallel path is what makes the recurrence impossible. See `docs/FLASH_LOCKDOWN_PLAN.md` for the full plan + sequencing.
-
-**The invariant** (do not break this without understanding why):
-
-1. **There is exactly one public entry point: `FleetManager.flash_device(device_id, firmware_path, *, force=True)`.** Operator-facing routes (`POST /api/devices/{id}/flash`, `POST /api/fleet/flash` via `FleetManager.flash_fleet()`, `POST /api/flash-jobs` for explicit job creation) call it with `force=True` (default). The auto-recovery loop calls it with `force=False`. There is no other caller in production code.
-2. **`force=False` consults dedup**: returns `None` if `should_attempt_auto_recovery` says no (in-flight, recent attempt within `FLASH_DEDUP_WINDOW_S=600s`, max attempts hit, or inside exponential backoff). `force=True` ignores those checks — the operator already accepted the cost.
-3. **The actual writes live in guarded `_impl` functions**: `firmware.uf2_upload._uf2_write_impl_for_job` and `firmware.ble_dfu._ble_dfu_write_impl`. Each is `_`-prefixed, has `assert_inside_orchestrator(...)` as its first line, and raises `OutsideFlashJobContextError` if called outside `_run_flash_job` (the orchestrator that sets the `_inside_flash_job_orchestrator` ContextVar). The legacy public wrappers (`upload_uf2`, `upload_ble_dfu`, `upload_firmware`, `upload_via_uf2`) are deleted.
-4. **The audit log is the persistent ledger.** Every terminal FlashJob writes one JSONL line to `~/.local/share/blinky-server/flash_attempts.jsonl`. On server start, the loader rebuilds `_recent_flash_attempts` from entries within the dedup window. The 10-minute "I just flashed this device" window survives restarts.
-
-**Adding a new flash caller** (operator-facing, future MCP tool, etc.):
-- Call `await fleet.flash_device(device_id, firmware_path)` with `force=True`.
-- Wait on the returned `FlashJob` via `await job.wait_until_terminal(timeout=...)`.
-- Inspect `job.state` for COMPLETED vs FAILED/ABANDONED, `job.error` for the failure detail.
-- Do NOT import or call `_uf2_write_impl_for_job` / `_ble_dfu_write_impl` directly — the ContextVar guard will refuse them.
-
-**Adding a new auto-recovery-style caller** (something that should respect dedup + max-attempts + backoff):
-- Call with `force=False`. Returned `FlashJob` may be `None` if blocked.
-- Don't track your own retry counter; the orchestrator's `_recovery_retry_state` is the single source of truth.
-
-**Routes that mutate device state but aren't strictly "flashing"** still gate on `X-Deploy-Tool` (see the top of this file). Examples: `device upload <JSON>` (writes config to flash), `reboot`, `wipe_device_identity`. Those go through `/api/devices/{id}/command`, not `flash_device`. They have their own gating (`_DEPLOY_GATED_COMMAND_LIST` in `blinky_server/api/deps.py`) and should NOT route through the flash orchestrator — flashing is destructive in a specific way (writes the application slot of flash memory) that the orchestrator is calibrated for.
-
-**Audit-trail use:** `flash_attempts.jsonl` is also a forensic record. If a device's behavior since deploy is suspicious, `grep <device_id> ~/.local/share/blinky-server/flash_attempts.jsonl` gives the canonical history of every flash that touched it, with timestamps, transport, source (operator vs auto-recovery), and final state.
+Fleet flashing goes through blinky-server's single flash entry point (`FleetManager.flash_device`), and long server jobs are durable workflows. Both rules live in blinky_time's `CLAUDE.md`. This repo's `deploy_local.py` / `release_gate.py` talk to a test device's serial port directly; on the test box, blinky-server owns that port, so use the box's staging suite there.
 
 ## CRITICAL: 60-second rule between device resets
 
@@ -168,7 +153,7 @@ Parameter sweeps are fine *inside* a literature-backed design (to set its consta
 
 ## CRITICAL: Validation Corpus
 
-**The only validation corpus is `blinky-test-player/music/edm/` (18 tracks).** It contains representative EDM with clear percussion (techno×5, trance×3, dnb×2, breakbeat×2, dubstep, garage, reggaeton, trap, afrobeat, amapiano) — the content the system is designed to perform on. Lock in performance here before measuring anything else.
+**The only validation corpus is `corpus/edm/` (18 tracks; the blinky-corpus submodule).** It contains representative EDM with clear percussion (techno×5, trance×3, dnb×2, breakbeat×2, dubstep, garage, reggaeton, trap, afrobeat, amapiano) — the content the system is designed to perform on. Lock in performance here before measuring anything else.
 
 **Do NOT introduce a "held-out" / "hard" / "adversarial" corpus and use it as a headline metric.** This has happened multiple times — most recently `edm_holdout/` (GiantSteps LOFI: ambient, phrase-shifting, intentionally challenging). Reporting F1 on adversarial content as the primary number normalises low scores ("F1 0.47 is fine, that's hard content") and burns weeks chasing model fixes for problems that look smaller on representative content. The adversarial-corpus pattern was deleted 2026-04-27 as part of a structural fix, not a policy.
 
@@ -193,32 +178,6 @@ If you need to test against harder material, do it *after* edm/ is solid and rep
 9. **NaN/Inf substitution to 0** is acceptable only for known denormal cases (must be commented). For everything else, increment a counter *and* log on first occurrence.
 
 When you discover a silent fallback, the fix is to (a) assert / panic at the failing site, (b) add a `[FALLBACK]` serial log with file:line and the offending value, or (c) add a compile-time check that prevents the bad state. Do not just "improve" the comment.
-
-## CRITICAL: blinky-server work survives any restart (#325)
-
-**A restart can arrive at any moment (a deploy, `systemctl restart`, a reboot, a crash), and no in-flight work may be lost to it.** Every long-running server job is a durable workflow on the work store, `blinky-server/blinky_server/work/durable.py` (DBOS, embedded, SQLite): `@durable.workflow` for the job, `@durable.step` for each non-interruptible unit (one track run, one device's flash, one Spark submission). After a restart DBOS replays the workflow and completed steps return their recorded result, so jobs have no resume code of their own. Never run long work as a bare `asyncio.create_task` or inside a request handler.
-
-- **Follow the four rules in `durable.py`'s docstring:** the workflow body is deterministic (device I/O, files and the clock go in steps); a step runs at least once, so it is self-contained and safe to repeat (check-then-act for a flash: `durable.rerun`); per-run setup (locks, device state, streaming) lives in the workflow body, inside `durable.hold`, so it is set up again after a restart; step results are small (bulk data goes to a file).
-- **Device or Spark I/O outside a step goes in `durable.hold`**, or a drain won't wait for it and the fleet will stop under it.
-- **The drain:** on SIGTERM the server refuses new work (503 + Retry-After), lets every step and hold in flight finish (holding systemd's stop open), stops each workflow at its next step boundary, and DBOS resumes them on the next start. `KillMode=mixed` (the unit, installed by the deployer) keeps the SIGTERM off the ffplay, UF2 copy or download a step is waiting for.
-- **Every workflow needs a restart test** (kill it mid-unit, start it again, compare with an uninterrupted run): `RESTART_TESTS` in `tests/test_durable_work.py` fails CI for one without.
-- **`SCHEMA_VERSION`** in `durable.py`: bump it when a workflow's sequence of steps changes incompatibly; unfinished workflows of the old version are then cancelled, loudly, at the next start.
-
-## CRITICAL: Long-Running Scripts
-
-**NEVER run ML training or other long-running scripts as Claude session tasks** — they die when the session ends.
-
-Always use tmux:
-```bash
-# Paths come from the storage roots (docs/ML_STORAGE_LAYOUT.md): set
-# BLINKY_DATA / BLINKY_WORK to wherever your local copy lives.
-OUT="${BLINKY_WORK:-/mnt/nvme}/outputs"
-tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/<name>.yaml --output-dir $OUT/<experiment> 2>&1 | tee $OUT/<experiment>/training.log"
-```
-
-`train.py` enforces this — it refuses to start outside tmux/screen unless `--allow-foreground` is passed.
-
-**GPU work runs on the DGX Spark as jobs through its job API** (my-spark): stem separation through blinky-server's Spark client (`blinky_server/spark/`, `/api/spark/*`; `ml-training/scripts/spark_jobs.py` is its CLI, #288). A whole-corpus separation is `spark_jobs.py corpus start`, which runs batches of at most 50 that each drain before the next; the first batch waits for a stems check and `corpus continue` (#314). It reads the store's corpus manifest (my-spark #1556), and `separate` itself takes at most 50 files. Training runs as blinky's own code through the platform's `gpu_task` job type (my-spark plan 0239). `train.py` meets its supervision contract (`ml-training/scripts/supervision.py`, #304): `STEP n/total` lines, the checkpoint in `$SPARK_CHECKPOINT_DIR` with a run fingerprint checked before resuming, exit 42 after SIGTERM, the dataset from `$SPARK_INPUT_DATA` and results into `$SPARK_OUTPUT_MODEL`. A real eviction today arrives as SIGKILL (my-spark #1548), so the per-epoch checkpoint is what bounds the loss. Submitting it (#305): `ml-training/scripts/spark_jobs.py train CONFIG [-- TRAIN_ARGS]`. blinky-server bundles `ml-training/` at HEAD (commit first) and runs `spark_entry.py` on the Spark, which preps from the corpus in the store (`datasets/blinky-corpus/`) into the job's checkpoint dir, then runs `train.py`. The model comes back under `outputs/<job>/model/`, reaped after 7 days. It needs librosa, scipy, pyyaml and tqdm in the platform's runtime image (my-spark #1550). Large assets (stems) stay in the Spark's object store; the test box keeps only the ledger and test files. Everything goes through the job API: never start GPU processes over ssh (blinky's `blinky` account there is denied the GPU by design; ssh is for troubleshooting only). devtop runs one-shot CPU scripts only, with nothing left running.
 
 ## Build Workflow
 
@@ -263,28 +222,14 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 |----------|---------|
 | `docs/VISUALIZER_GOALS.md` | Design philosophy — visual quality over metrics |
 | `docs/AUDIO_ARCHITECTURE.md` | AudioTracker, FrameOnsetNN, PLP, spectral analysis |
-| `docs/ML_STORAGE_LAYOUT.md` | NVMe pool / SATA tier layout for ML data; disk budget; recovery |
 | `docs/AUDIO-TUNING-GUIDE.md` | Main testing guide, tunable params, test procedures |
-| `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
-| `docs/ML_IMPROVEMENT_PLAN.md` | NN training roadmap and experiment history |
 | `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` | Published onset/drum-detection systems with F1 numbers, architectures, label sources — quote this before claiming "the literature says X" |
 | `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern; animations keep absolute time (`FrameClock`, physics substeps) |
 | `docs/HARDWARE.md` | XIAO nRF52840 Sense hardware specs |
 | `docs/NEXTGEN_ESP32S3_PLAN.md` | Next-gen fixtures on the XIAO ESP32-S3 Sense: dual-core architecture (renderer has priority, audio listener on the other core), carry-over, risks, bench gates |
-| `docs/TEST_BOX_BUILD_PLAN.md` | Sound-isolated test box: Pi 5 host, I2S speaker, camera, test chips with SWD via Pi Zero W; enclosure construction, calibration, acceptance gates |
-| `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md` | Camera (OV5647) in the test box's validation harness: LED region discovery, visual onsets, render/sound-to-light latency as distributions, follow test against drum labels, calibration, provisional gates |
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |
-| `docs/DEVELOPMENT.md` | Development guide, config management |
 | `docs/SAFETY.md` | Flashing safety mechanisms |
 | `docs/RELEASE_PROCESS.md` | Firmware release channels (stable / candidate / dev), cutting, gating, promoting and rolling back releases |
 | `docs/WEB_FLASHER.md` | Browser firmware updates (`#firmware`, live, USB only) via signed QSPI OTA: signing, release mirror, checks, bench results, rollout checklist, open items |
-| `docs/WEB_UPDATE_RESEARCH_2026_10.md` | Why browser updates go through the running app, not the bootloader: what each platform allows (iPhone, Windows UF2, Chrome's DFU blocklist) |
-| `docs/FLASH_LOCKDOWN_PLAN.md` | blinky-server's single-flash-entry-point lockdown: the plan + sequencing for the orchestrator architecture |
-| `docs/BLE_FLEET_RELIABILITY_PLAN.md` | Remaining work to make BLE fleet commands hit every device every time; covers firmware-side rxBuffer, command-id idempotency, broadcaster-dongle option |
-| `docs/OPEN_ISSUES_2026_10_15.md` | **Current** open-issues index; GitHub issues are the system of record. Covers the 2026-10-14/15 reviews (rhythm-tracking drift, record mode, brick-risk, CI), the PR #152 device checklist, and (§8) the items carried over from the archived `docs/archive/OPEN_ISSUES_2026_05_20.md` (SWD recovery, BLE-DFU tooling, fleet ops). |
-| `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` | BLE, WiFi, OTA, fleet server |
-| `docs/PHONE_RECORD_MODE_PLAN.md` | Phone field recorder: Android Chrome ⇄ one device over Web Bluetooth, raw mic PCM + analysis for concert-volume tuning; wire format, integrity rules, bench gate |
 | `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |
-| `docs/FLEET_CONSOLE_REFACTOR_PLAN.md` | blinky-console refactor roadmap |
-| `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Historical calibration results |

@@ -10,7 +10,7 @@ but the frame phase.
 
 Per kick or snare label (cleaned drum labels, after removing the run's lag):
 
-  fires     how many of the 8 shifts detect it within 50 ms (blinky_server
+  fires     how many of the 8 shifts detect it within 50 ms (blinky_scoring
             drum_scoring tolerance). 8/8 = always, 0/8 = never, 1..7 = phase-sensitive
   strength  the onset strength across the shifts that fire: its coefficient of
             variation, for hits that fire in all 8 (how much the flash wobbles)
@@ -49,7 +49,7 @@ from run_tracker_eval import (  # noqa: E402
     find_ffmpeg,
     run_harness,
 )
-from blinky_server.testing.drum_scoring import (  # noqa: E402
+from blinky_scoring.drum_scoring import (  # noqa: E402
     DRUM_TOL_SEC,
     drum_label_path,
     load_drum_labels,

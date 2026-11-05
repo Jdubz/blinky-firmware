@@ -254,231 +254,6 @@ jobs:
           echo "⚠️  VERSION file not found"
         fi
 
-  blinky-server-tests:
-    name: Blinky Server Tests
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: blinky-server
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.13'
-
-    - name: Install dependencies
-      run: |
-        python -m venv venv
-        venv/bin/pip install -e ".[dev,ble]"
-
-    - name: Run linting
-      run: venv/bin/python -m ruff check blinky_server/ tests/
-
-    - name: Check formatting
-      run: venv/bin/python -m ruff format --check blinky_server/ tests/
-
-    - name: Run type checking
-      run: venv/bin/python -m mypy blinky_server/
-
-    - name: Run tests
-      run: venv/bin/python -m pytest tests/ -v
-
-    - name: Test box deployer and staging runner (scripts/testbox/)
-      # They decide what the test box runs and what reaches master (#349), so they are
-      # tested like the server.
-      run: |
-        venv/bin/python -m ruff check --line-length 100 ../scripts/testbox/
-        venv/bin/python -m ruff format --check --line-length 100 ../scripts/testbox/
-        venv/bin/python -m mypy --strict --ignore-missing-imports \
-          ../scripts/testbox/deploy.py ../scripts/testbox/staging.py
-        venv/bin/python -m pytest -v ../scripts/testbox/test_deploy.py ../scripts/testbox/test_staging.py
-
-  feature-parity:
-    name: Feature Parity (Python ↔ firmware)
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install numpy for unit tests
-      run: pip install 'numpy>=1.26,<3' scipy pyyaml
-
-    - name: Run Python shape-feature unit tests
-      # Regression guard for bin-indexing (centroid/HFC k=1..N) and the
-      # resolve_hybrid_features config parser. Runs offline — no audio
-      # files or harness build required. The firmware-parity side is
-      # verified locally via ml-training/analysis/run_parity_test.py.
-      working-directory: ml-training
-      run: python -m analysis.test_shape_features
-
-    - name: Mel parity (training front end vs firmware, #295)
-      # The NN runs on the firmware's integer MEL_BANDS table, not an HTK
-      # filterbank. Builds tests/parity (the real SharedSpectralAnalysis.cpp)
-      # and checks: the spec carries the firmware's table and constants; the
-      # firmware still produces the golden frames; training's front end
-      # (scripts/mel_frontend.py) reproduces them; configs default to the table.
-      run: |
-        cmake -S tests/parity -B tests/parity/build -DCMAKE_BUILD_TYPE=Release
-        cmake --build tests/parity/build -j
-        cd ml-training
-        python -m analysis.test_mel_parity --harness ../tests/parity/build/parity_harness
-
-    - name: Mel front end travels to the model header (#291)
-      # prepare_dataset.py records the front end, train.py and export_tflite.py
-      # carry it into the header, and FrameOnsetNN.h / check_model_input.py
-      # refuse one the firmware doesn't run. The record and the header check.
-      working-directory: ml-training
-      run: |
-        pip install pytest
-        python -m pytest -q tests/test_mel_frontend_record.py
-
-    - name: Run ML storage-root, Spark client and drum-label sync tests
-      # No config may hardcode a machine's mounts (#286): data and work roots
-      # come from BLINKY_DATA / BLINKY_WORK. The Spark CLI (#288) is a thin
-      # client of blinky-server's /api/spark routes; the client itself is
-      # tested with the server (blinky-server/tests/test_spark.py).
-      # blinky-server's drum scoring cleans kick_weighted labels with its own
-      # copy of clean_kick_weighted.py's rule (#294); the two must agree.
-      working-directory: ml-training
-      run: |
-        pip install pytest
-        python -m pytest -q tests/test_storage_roots.py tests/test_spark_jobs.py tests/test_prep_steps.py \
-          tests/test_drum_label_sync.py tests/test_supervision.py
-
-  trainer-contract:
-    name: Trainer meets the Spark gpu_task contract (#304, #305)
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install CPU torch
-      run: |
-        pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-        pip install 'numpy>=1.26,<3' scipy pyyaml pytest librosa tqdm soundfile
-
-    - name: SIGTERM -> exit 42 -> resume -> finish; a changed run refuses the checkpoint
-      # The real train.py on a tiny synthetic dataset, with the environment the Spark's
-      # gpu_task worker sets (SPARK_INPUT_DATA, SPARK_OUTPUT_MODEL, SPARK_CHECKPOINT_DIR).
-      working-directory: ml-training
-      run: python -m pytest -v tests/test_trainer_supervision.py
-
-    - name: Shift-tolerant loss (#290)
-      # Beat This!'s loss: firing within ±3 frames of a label is free, and no frame within ±6
-      # of one is a negative.
-      working-directory: ml-training
-      run: python -m pytest -v tests/test_losses.py
-
-    - name: spark_entry.py preps the corpus and trains; SIGTERM in prep exits 42
-      # Real prepare_dataset.py (augmented: RIR + noise) then train.py, on an eight-track
-      # synthetic corpus laid out like the store's datasets/blinky-corpus/, code read-only.
-      working-directory: ml-training
-      run: python -m pytest -v tests/test_spark_entry.py
-
-    - name: Drum label regression suite and generator guards (#284)
-      # The suite a kick/snare label generator must pass, its baseline, and the generator's
-      # refusal to mix labels from two generators in one dir. ADTOF's own tests skip here:
-      # they run in the adtof-labeler job.
-      working-directory: ml-training
-      run: python -m pytest -v tests/test_drum_label_suite.py
-
-  adtof-labeler:
-    name: ADTOF drum labeler (#284)
-    # The labels' generator: ADTOF's Frame_RNN through the PyTorch port, pinned, as the Spark's
-    # torch-cu130 runtime installs it (my-spark #1561). Its tests may not skip here, and the
-    # committed evidence (drum_label_adtof.json) must be what it produces.
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install CPU torch and the port
-      working-directory: ml-training
-      run: |
-        pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-        pip install 'numpy>=1.26,<3' scipy pyyaml pytest librosa tqdm soundfile pretty_midi
-        pip install "$(python -c 'from scripts.adtof_labels import ADTOF_PYTORCH; print(ADTOF_PYTORCH)')"
-
-    - name: ADTOF's tests (no skips)
-      working-directory: ml-training
-      env:
-        BLINKY_REQUIRE_ADTOF: "1"
-      run: python -m pytest -v tests/test_drum_label_suite.py -k adtof
-
-    - name: The committed evidence is ADTOF's
-      # Re-scores ADTOF on the synthetic set and edm/'s 18 mixes. A difference means
-      # drum_label_adtof.json isn't what this generator produces: commit the uploaded file.
-      working-directory: ml-training
-      run: |
-        python scripts/drum_label_suite.py candidate --algorithm adtof
-        git diff --exit-code scripts/drum_label_adtof.json
-
-    - name: Upload the regenerated evidence
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: drum_label_adtof
-        path: ml-training/scripts/drum_label_adtof.json
-
-  blinky-console-tests:
-    name: Blinky Console Tests
-    runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: blinky-console
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-
-    - name: Install dependencies
-      run: npm ci
-
-    - name: Run linting
-      run: npm run lint
-
-    - name: Check formatting
-      run: npm run format:check
-
-    - name: Run type check
-      run: npm run typecheck
-
-    - name: Run tests
-      run: npx vitest run
-
-    - name: Build
-      run: npm run build
-
   tracker-harness:
     name: Tracker Harness (UBSan stress + corpus gate)
     runs-on: ubuntu-latest
@@ -487,6 +262,10 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    # The corpus (and its scorers) only: the bootloader submodule isn't needed.
+    - name: Corpus submodule
+      run: git submodule update --init --depth 1 corpus
 
     - name: Setup Python
       uses: actions/setup-python@v5
@@ -552,7 +331,7 @@ jobs:
     #
     # The drum floors are the PRIMARY gate (#294): kick recall at +-50 ms,
     # on-drum share and drum F against cleaned kick_weighted labels
-    # (blinky_server/testing/drum_scoring.py). Baseline on master (SuperFlux,
+    # (blinky-corpus: blinky_scoring/drum_scoring.py). Baseline on master (SuperFlux,
     # 2026-10-27), means over 35/60/90 fps: kick R 0.789, on-drum 0.583,
     # drum F 0.638 (the #292 study: 0.79 / 0.56 / 0.657). Snare recall (0.727)
     # is reported but not gated: provisional until the label fixes in #284.
@@ -593,6 +372,10 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    # The corpus (and its scorers) only: the bootloader submodule isn't needed.
+    - name: Corpus submodule
+      run: git submodule update --init --depth 1 corpus
 
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v2

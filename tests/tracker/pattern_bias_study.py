@@ -11,7 +11,7 @@ Each track runs twice through the same harness: default bias ("on") and
 onset within +-32 ms. For each suppressed hit:
 
   label     kick / snare / hat / other: the nearest cleaned drum label within 50 ms,
-            after removing the run's lag (blinky_server drum_scoring)
+            after removing the run's lag (blinky_scoring.drum_scoring)
   repeat    the hit lies in repeated audio (tests/tracker/consistency.py) and the
             "on" run fires its counterpart one repeat earlier or later: the bias
             made a repeat inconsistent
@@ -51,7 +51,7 @@ from run_tracker_eval import (  # noqa: E402
     lock_score,
     run_harness,
 )
-from blinky_server.testing.drum_scoring import (  # noqa: E402
+from blinky_scoring.drum_scoring import (  # noqa: E402
     DRUM_TOL_SEC,
     drum_label_path,
     load_drum_labels,
