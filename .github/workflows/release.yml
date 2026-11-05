@@ -74,6 +74,19 @@ jobs:
         if [ -n "$have" ]; then
           echo "$SHA already has candidate $have; nothing to do"
           echo "skip=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        # No firmware change since the newest bN (candidate or stable): nothing new to ship.
+        # The paths are tools/firmware_paths.json, at this commit; the box's staging runner
+        # skips the hardware test by the same list.
+        last=$(git tag -l 'b[0-9]*' | grep -E '^b[0-9]+$' | sort -V | tail -1)
+        if [ -n "$last" ]; then
+          mapfile -t paths < <(jq -r '.paths[]' tools/firmware_paths.json)
+          [ "${#paths[@]}" -gt 0 ] || { echo "::error title=Release::tools/firmware_paths.json lists no paths"; exit 1; }
+          if git diff --quiet "$last" "$SHA" -- "${paths[@]}"; then
+            echo "::notice title=Release::no firmware change since $last (tools/firmware_paths.json); no candidate"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
         fi
 
     # The commit must already have passed PR Validation on master: a release
