@@ -109,7 +109,8 @@ jobs:
         build/ota_manifest_test
 
   timing:
-    name: Absolute Timing (generators + rhythm phase, #259-#261)
+    # Quoted: unquoted, YAML reads ` #259-#261)` as a comment and the check is named "...phase,".
+    name: "Absolute Timing (generators + rhythm phase, #259-#261)"
     runs-on: ubuntu-latest
 
     steps:
