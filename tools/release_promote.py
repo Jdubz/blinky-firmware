@@ -111,22 +111,24 @@ def staging_gate(tag, manifest, note):
     print(f"  recorded gate-staging.json on {tag} (hardware: {head[:12]}, operator: {note})")
 
 
+CONSOLE_REPO = "Jdubz/blinky_time"
+
+
 def redeploy_console(what):
     """Re-mirror stable releases for the web flasher (docs/WEB_FLASHER.md).
 
-    The console deploy also listens for tag and release events, but GitHub
-    runs those with the workflow file of the *tagged* commit, which for an
-    older release may predate the trigger. workflow_dispatch always runs
-    master's workflow, so dispatch it explicitly. The release change above
+    The console lives in blinky_time, so this repo's release events can't
+    trigger it: it is dispatched there explicitly (it also runs daily). The release change above
     has already happened; a failed dispatch is reported loudly with the
     manual command.
     """
     try:
-        gh("workflow", "run", "blinky-console-deploy.yml", "--ref", "master")
+        # The console (and its firmware mirror) lives in blinky_time (blinky_time#357).
+        gh("workflow", "run", "blinky-console-deploy.yml", "-R", CONSOLE_REPO, "--ref", "master")
     except ReleaseError as e:
         raise ReleaseError(f"{what} succeeded, but the console redeploy could not be dispatched ({e}). "
                            "The web flasher still offers the old default: run "
-                           "`gh workflow run blinky-console-deploy.yml --ref master`")
+                           f"`gh workflow run blinky-console-deploy.yml -R {CONSOLE_REPO} --ref master`")
     print("  console redeploy dispatched (web flasher mirror)")
 
 
