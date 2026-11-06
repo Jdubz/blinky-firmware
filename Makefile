@@ -9,7 +9,7 @@
 #
 # Flashing is NOT done from here (#270). Every flash must run a hardened path
 # (CLAUDE.md "Upload Safety"):
-#   fleet devices         ./scripts/deploy.sh --devices=...   (or POST /api/fleet/deploy)
+#   fleet devices         blinky_time's ./scripts/deploy.sh --devices=...   (or POST /api/fleet/deploy)
 #   a device on this USB  python tools/deploy_local.py --port ... --device-id ...
 #   bootloader            ./scripts/deploy-bootloader.sh      (sacrificial device first)
 # The old upload / flash / uf2-upload-all / bootloader-update targets refuse
@@ -53,7 +53,7 @@ endif
 # the single flash path, version verify, settings restore + save.
 define REFUSE_FLASH
 @echo "REFUSED: make does not flash devices (CLAUDE.md 'Upload Safety', issue 270)." >&2
-@echo "  fleet:              ./scripts/deploy.sh --devices=<ids|all>   (or POST /api/fleet/deploy)" >&2
+@echo "  fleet:              blinky_time's ./scripts/deploy.sh --devices=<ids|all>   (or POST /api/fleet/deploy)" >&2
 @echo "  device on this USB: python tools/deploy_local.py --port <port> --device-id <id> [--dev]" >&2
 @echo "  bootloader:         ./scripts/deploy-bootloader.sh  (sacrificial device first)" >&2
 @exit 1
@@ -74,7 +74,7 @@ help:
 	@echo "  list-boards  - List connected Arduino boards"
 	@echo "  version      - Regenerate Version.h from BUILD_NUMBER"
 	@echo ""
-	@echo "Flashing: not from make. Use scripts/deploy.sh (fleet), tools/deploy_local.py"
+	@echo "Flashing: not from make. Use blinky_time's scripts/deploy.sh (fleet), tools/deploy_local.py"
 	@echo "(a device on this USB) or scripts/deploy-bootloader.sh (bootloader)."
 	@echo ""
 	@echo "Bare-chip recovery only (a bricked device not yet enrolled):"
