@@ -8,7 +8,7 @@
  * Hardware: nRF52840 XIAO Sense with WS2812B LED strips
  * Author: Blinky Time Project Contributors
  * License: Creative Commons Attribution-ShareAlike 4.0 International
- * Repository: https://github.com/Jdubz/blinky_time
+ * Repository: https://github.com/Jdubz/blinky-firmware
  *
  * Device Types:
  * - Hat: 89 LEDs in string configuration

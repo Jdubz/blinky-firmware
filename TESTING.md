@@ -10,7 +10,7 @@ There are two kinds of tests:
 |----------|---------|
 | [tests/README.md](tests/README.md) | Host tests (timing, OTA manifest, tracker harness, parity) and the CI jobs that run them |
 | [docs/AUDIO-TUNING-GUIDE.md](docs/AUDIO-TUNING-GUIDE.md) | **Primary on-device guide** - Tunable parameters, test procedures, troubleshooting |
-| [docs/TESTING_METHODOLOGY.md](docs/TESTING_METHODOLOGY.md) | Tiered testing approach, from the host harness up to full on-device validation |
+| [blinky_time docs/TESTING_METHODOLOGY.md](https://github.com/Jdubz/blinky_time/blob/master/docs/TESTING_METHODOLOGY.md) | Tiered testing approach, from the host harness up to full on-device validation |
 | [blinky-test-player/PARAMETER_TUNING_HISTORY.md](blinky-test-player/PARAMETER_TUNING_HISTORY.md) | Historical calibration results |
 
 The only validation corpus is `blinky-test-player/music/edm/` (18 tracks). Ground truth is each track's `.onsets_consensus.json`: the task is onset detection, not beat detection (see [CLAUDE.md](CLAUDE.md)).

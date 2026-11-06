@@ -118,8 +118,8 @@ Re-marks `bM` as *Latest*. Nothing is rebuilt; the next deploy installs `bM`. It
 
 | Command | Installs |
 |---|---|
-| `./scripts/deploy.sh --devices=all` | latest stable, downloaded and sha256-verified |
-| `./scripts/deploy.sh --devices=ID --release bN` | a specific **stable** release (pin or roll back a subset) |
+| blinky_time's `./scripts/deploy.sh --devices=all` | latest stable, downloaded and sha256-verified |
+| blinky_time's `./scripts/deploy.sh --devices=ID --release bN` | a specific **stable** release (pin or roll back a subset) |
 | `python tools/deploy_local.py --port COMx --device-id ID` | latest stable, for a device on this machine's USB |
 | `python tools/deploy_local.py ... --release bN` | release `bN`; a candidate only if `ID` is a test device |
 | `python tools/deploy_local.py ... --dev` | local build of a clean tree (test device only) |
