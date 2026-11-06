@@ -9,6 +9,7 @@
 #   ./scripts/build.sh --dev              # local dev build: no bump, version b<N>-dev-<sha>
 #   ./scripts/build.sh --dev --ota-bench-key   # dev build trusting the bench OTA key (signed-OTA bench tests)
 #   ./scripts/build.sh --build N          # exact build number, no bump (release CI)
+#   ./scripts/build.sh --fingerprint      # fixed version fields, isolated build: an image to hash only
 #
 # Releases are built by .github/workflows/release.yml, not locally; see
 # docs/RELEASE_PROCESS.md. Local builds are for one test device only.
@@ -26,6 +27,7 @@ cd "$(git rev-parse --show-toplevel)"
 BUMP=true
 DEV=false
 OTA_BENCH_KEY=false
+FINGERPRINT=false
 FORCE_BUILD=""
 ESP32=false
 UPLOAD=false
@@ -41,6 +43,9 @@ while [[ $# -gt 0 ]]; do
         # ota/OtaKeys.h), to test signed OTA on a test device. Dev builds only;
         # the firmware static_asserts a -dev- version.
         --ota-bench-key) OTA_BENCH_KEY=true; shift ;;
+        # The staging build's fingerprint (staging-build.yml): the sketch compiled with
+        # every per-commit field fixed, so equal code gives an equal image. Never flashed.
+        --fingerprint) FINGERPRINT=true; BUMP=false; shift ;;
         --build)
             if [[ $# -lt 2 || ! "$2" =~ ^[0-9]+$ ]]; then
                 echo "Error: --build requires a build number" >&2; exit 1
@@ -69,6 +74,20 @@ PYTHON="${PYTHON:-$(command -v python3 2>/dev/null || command -v python 2>/dev/n
 if $OTA_BENCH_KEY && ! $DEV; then
     echo "Error: --ota-bench-key is only allowed with --dev" >&2
     exit 1
+fi
+
+# --fingerprint: an image to hash, never to flash or ship. Its own output, build and cache
+# paths, so it shares no compiled object with a real build (in either direction), and a
+# fixed SOURCE_DATE_EPOCH, so any __DATE__/__TIME__ in the core or libraries is fixed too.
+FP_DIR="/tmp/blinky-fingerprint"
+if $FINGERPRINT; then
+    if $DEV || $UPLOAD || $ESP32 || $OTA_BENCH_KEY || [[ -n "$FORCE_BUILD" ]]; then
+        echo "Error: --fingerprint takes no other option" >&2
+        exit 1
+    fi
+    rm -rf "$FP_DIR"
+    OUTPUT_DIR="$FP_DIR/out"
+    export SOURCE_DATE_EPOCH=0
 fi
 
 # --- Pinned, isolated toolchain (#252) ---
@@ -102,7 +121,10 @@ if [[ -n "$FORCE_BUILD" ]]; then
 fi
 
 # --- Generate Version.h (single generator shared with the Makefile, #213) ---
-if $DEV; then
+if $FINGERPRINT; then
+    BUILD=0
+    bash scripts/gen_version.sh 0 --fingerprint
+elif $DEV; then
     bash scripts/gen_version.sh "$BUILD" --dev
 else
     bash scripts/gen_version.sh "$BUILD"
@@ -123,6 +145,9 @@ COMPILE_ARGS=(
 )
 if $OTA_BENCH_KEY; then
     COMPILE_ARGS+=(--build-property "compiler.cpp.extra_flags=-DBLINKY_OTA_BENCH_KEY")
+fi
+if $FINGERPRINT; then
+    COMPILE_ARGS+=(--build-path "$FP_DIR/build" --build-cache-path "$FP_DIR/cache")
 fi
 
 if $UPLOAD && $ESP32; then

@@ -1,10 +1,14 @@
 #!/bin/bash
 # Single generator for blinky-things/types/Version.h (#213).
 #
-# Usage: scripts/gen_version.sh <build-number> [--dev]
+# Usage: scripts/gen_version.sh <build-number> [--dev | --fingerprint]
 #
 # --dev stamps the version "b<N>-dev-<sha>": a local build for one test
 # device (docs/RELEASE_PROCESS.md), never mistakable for release b<N>.
+#
+# --fingerprint stamps fixed values (build 0, SHA 00000000, a fixed build
+# date) so two commits that compile to the same code give the same image.
+# That image is only hashed (scripts/build.sh --fingerprint), never flashed.
 #
 # Called by scripts/build.sh (after it bumps BUILD_NUMBER) and by the
 # Makefile `version` target, so every build path embeds the same fields,
@@ -24,7 +28,13 @@ fi
 
 BUILD="${1:-}"
 DEV=false
-[[ "${2:-}" == "--dev" ]] && DEV=true
+FINGERPRINT=false
+case "${2:-}" in
+    --dev) DEV=true ;;
+    --fingerprint) FINGERPRINT=true ;;
+    "") ;;
+    *) echo "Error: unknown option '${2}'" >&2; exit 1 ;;
+esac
 if ! [[ "$BUILD" =~ ^[0-9]+$ ]]; then
     echo "Error: build number must be a non-negative integer, got '$BUILD'" >&2
     exit 1
@@ -34,7 +44,9 @@ fi
 # is reused (--no-bump, branch hopping). Build outputs are excluded from the
 # dirty check: Version.h is regenerated here and build.sh rewrites
 # BUILD_NUMBER after every bumped build, so neither means "sources changed".
-if $IN_GIT; then
+if $FINGERPRINT; then
+    GIT_SHA="00000000"
+elif $IN_GIT; then
     GIT_SHA=$(git rev-parse --short=8 HEAD)
     EXCLUDE=(':!blinky-things/types/Version.h' ':!blinky-things/BUILD_NUMBER')
     if ! git diff --quiet -- . "${EXCLUDE[@]}" \
@@ -48,6 +60,9 @@ fi
 
 CHANNEL_TAG=""
 $DEV && CHANNEL_TAG="dev-"
+$FINGERPRINT && CHANNEL_TAG="fingerprint-"
+BUILD_DATE='__DATE__ " " __TIME__'
+$FINGERPRINT && BUILD_DATE='"fingerprint"'
 
 cat > blinky-things/types/Version.h << EOF
 #pragma once
@@ -61,7 +76,7 @@ cat > blinky-things/types/Version.h << EOF
 // reused build number (--no-bump) can't disguise different code on a
 // running device.
 #define FIRMWARE_VERSION "b$BUILD-${CHANNEL_TAG}$GIT_SHA"
-#define FIRMWARE_BUILD_DATE __DATE__ " " __TIME__
+#define FIRMWARE_BUILD_DATE $BUILD_DATE
 EOF
 
 echo "=== Build $BUILD ($GIT_SHA) ==="
