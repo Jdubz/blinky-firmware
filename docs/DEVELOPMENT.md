@@ -194,14 +194,14 @@ Or via Makefile: `make compile-out` and `make esp32-compile`. Don't call `arduin
 
 ### How to Increment SETTINGS_VERSION
 
-**File: `blinky-things/config/ConfigStorage.h`** (currently at SETTINGS_VERSION = 98)
+**File: `blinky-things/config/ConfigStorage.h`**. Bump the current value by one; never reuse a number an older layout had. The example below uses 100 → 101 (100 was current when this was written; check the file).
 
 ```cpp
 // Before:
-static const uint8_t SETTINGS_VERSION = 98;
+static const uint8_t SETTINGS_VERSION = 100;
 
 // After:
-static const uint8_t SETTINGS_VERSION = 99;  // v99: describe your changes here
+static const uint8_t SETTINGS_VERSION = 101;  // v101: describe your changes here
 ```
 
 Note: a `SETTINGS_VERSION` bump keeps the device config (LED layout, device name, etc.) but resets every runtime setting to its default on each device (boot log: "Settings version mismatch, using defaults (device config preserved)"). Release notes flag it for that reason.
@@ -212,7 +212,7 @@ Note: a `SETTINGS_VERSION` bump keeps the device config (LED layout, device name
 2. **Update comment** with description of changes
 3. **Add validation** for new parameters in ConfigStorage.cpp `loadConfiguration()`
 4. **Update static_assert** for struct size in ConfigStorage.h
-5. **Update defaults** in `loadDefaults()`
+5. **Update defaults** in `loadSettingsDefaults()` (the settings-version mismatch path calls only that, not `loadDefaults()`)
 6. **Update load/save** in `loadConfiguration()` and `saveConfiguration()`
 7. **Run safety script**: `python scripts/check_config_safety.py`
 
@@ -225,15 +225,15 @@ struct StoredMicParams {
     float newParameter;  // NEW: describe purpose
 };
 
-// 2. Increment version (current = 98; bump to next)
-static const uint8_t SETTINGS_VERSION = 99;  // v99: added newParameter for XYZ
+// 2. Increment version (current + 1)
+static const uint8_t SETTINGS_VERSION = 101;  // v101: added newParameter for XYZ
 
 // 3. Update static_assert (StoredMicParams is currently 8 bytes; sizes for
 //    other structs are in ConfigStorage.h ~lines 394-406)
 static_assert(sizeof(StoredMicParams) == 12,  // Updated from 8
     "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion.");
 
-// 4. Add default (ConfigStorage.cpp loadDefaults())
+// 4. Add default (ConfigStorage.cpp loadSettingsDefaults())
 data_.mic.newParameter = 1.0f;  // Reasonable default
 
 // 5. Add validation (ConfigStorage.cpp loadConfiguration())
@@ -354,7 +354,7 @@ Before merging config changes:
 - [ ] Version comment describes changes
 - [ ] Static assertions updated
 - [ ] New parameters have validation
-- [ ] Defaults set in `loadDefaults()`
+- [ ] Defaults set in `loadSettingsDefaults()`
 - [ ] Load/save methods updated
 - [ ] Safety script passes: `python scripts/check_config_safety.py`
 - [ ] Compiled cleanly: `./scripts/build.sh --no-bump` (ESP32 path optional — `esp32-compile` only if touching `BLINKY_PLATFORM_ESP32S3`-guarded code)

@@ -22,7 +22,7 @@ This directory contains code snippets for the Blinky Time firmware. They are ref
 
 ### Recovery Sketch
 - `recovery-sketch/recovery-sketch.ino` - Minimal sketch that only blinks the built-in LED, to check that a chip runs at all.
-  - **Do not upload it with `arduino-cli upload` or the Arduino IDE Upload button**; that can brick the nRF52840. For a bricked chip, follow the recovery steps in [CLAUDE.md](../CLAUDE.md) (`make uf2-upload` for a bare chip, or SWD recovery) and [docs/SAFETY.md](../docs/SAFETY.md).
+  - **Do not upload it with `arduino-cli upload` or the Arduino IDE Upload button**; that can brick the nRF52840. For a bricked chip, follow the recovery steps in [CLAUDE.md](../CLAUDE.md) (`make uf2-upload` for a bare chip, or SWD recovery) and blinky_time's [docs/SAFETY.md](https://github.com/Jdubz/blinky_time/blob/master/docs/SAFETY.md).
 
 ## Contributing Examples
 

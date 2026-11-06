@@ -25,7 +25,7 @@ Default LED data pin is **D10**. `big_bucket_v1`, `scarf` and `shannon_hat` use 
 
 ## Bootloader and flashing
 
-Every fleet device runs bootloader **0.8.0-10** (UF2 drive over USB plus BLE DFU). Firmware goes on only through blinky_time's `./scripts/deploy.sh` (fleet), `tools/deploy_local.py` (a device on your USB) or the browser updater (`docs/WEB_FLASHER.md`). Bootloader changes go only through `./scripts/deploy-bootloader.sh`, on a sacrificial device first. Never use `arduino-cli upload` or `adafruit-nrfutil dfu serial`. See CLAUDE.md and `docs/SAFETY.md`.
+Every fleet device runs bootloader **0.8.0-10** (UF2 drive over USB plus BLE DFU). Firmware goes on only through blinky_time's `./scripts/deploy.sh` (fleet), `tools/deploy_local.py` (a device on your USB) or the browser updater (`docs/WEB_FLASHER.md`). Bootloader changes go only through `./scripts/deploy-bootloader.sh`, on a sacrificial device first. Never use `arduino-cli upload` or `adafruit-nrfutil dfu serial`. See CLAUDE.md and blinky_time's [`docs/SAFETY.md`](https://github.com/Jdubz/blinky_time/blob/master/docs/SAFETY.md).
 
 The nRF52840 Sense also has 2 MB of external QSPI flash. Signed OTA updates stage the new image there while the old firmware keeps running (`blinky-things/ota/QspiOtaStaging.h`).
 

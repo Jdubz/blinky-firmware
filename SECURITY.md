@@ -30,7 +30,7 @@ This is an embedded LED controller (XIAO nRF52840 Sense). Ways to reach a device
 
 ### Firmware Updates
 
-- **Signed OTA:** `ota manifest` / `ota chunk` / `ota commit` accept only an image whose manifest carries a valid Ed25519 signature from the release key (public half in `blinky-things/ota/OtaKeys.h`) and is newer than the running build. This is the path the web updater uses ([docs/WEB_FLASHER.md](docs/WEB_FLASHER.md)).
+- **Signed OTA:** `ota manifest` / `ota chunk` / `ota commit` accept only an image whose manifest carries a valid Ed25519 signature from the release key (public half in `blinky-things/ota/OtaKeys.h`) and is newer than the running build, unless the manifest carries the signed emergency-rollback flag (`FLAG_EMERGENCY_ROLLBACK`), the one exception. This is the path the web updater uses ([docs/WEB_FLASHER.md](docs/WEB_FLASHER.md)).
 - **Release signing key:** held only in this repo's GitHub environment `release-signing` (master branch only). No offline backup has been verified. Only gated stable releases are signed. Never sign a dev or test build with it; use the bench key (see CLAUDE.md).
 - **What still bypasses signing** (see [docs/WEB_FLASHER.md](docs/WEB_FLASHER.md#what-still-bypasses-signing)):
   - UF2 drag-and-drop and SWD, which need physical access. That is accepted: whoever holds the device can reflash it.
