@@ -1,7 +1,7 @@
 # Changelog
 
 > **This file is no longer maintained** (last updated 2025). Firmware releases are versioned `bN`, not semver. The record of changes is:
-> - [GitHub Releases](https://github.com/Jdubz/blinky-firmware/releases) (b214 onward; earlier ones are in [blinky_time's releases](https://github.com/Jdubz/blinky_time/releases)): each release's notes list the changes since the previous one and flag `SETTINGS_VERSION` changes (see [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)).
+> - [GitHub Releases](https://github.com/Jdubz/blinky-firmware/releases): each release's notes list the changes since the previous one and flag `SETTINGS_VERSION` changes (see [docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)).
 > - `git log` for everything else.
 >
 > The entries below are kept for history only and do not describe the current firmware.
