@@ -9,11 +9,6 @@
 # .git/hooks by scripts/install-hooks.sh).
 hooks/** text eol=lf
 
-# Console: Prettier (endOfLine: lf) checks the working copy in the pre-push
-# hook, and the husky hooks are sh scripts. CRLF here fails format:check on
-# every untouched file.
-blinky-console/** text=auto eol=lf
-
 # cmd.exe mis-parses labels/goto in LF-only batch files.
 *.bat text eol=crlf
 *.cmd text eol=crlf

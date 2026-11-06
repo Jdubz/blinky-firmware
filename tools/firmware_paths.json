@@ -19,5 +19,11 @@
     "scripts/gen_version.sh",
     ".github/workflows/staging-build.yml",
     ".github/workflows/release.yml"
+  ],
+  "_unfingerprinted_doc": "Paths in the list above whose effect the Firmware fingerprint (staging-build.yml: the hex and UF2 built with per-commit fields fixed) does not see: the bootloader, and the tools that make the signed bin and OTA manifest at promotion. A change under one of these never counts as the same image: the hardware test runs and a candidate is cut, judged by the paths alone.",
+  "unfingerprinted": [
+    "bootloader/",
+    "tools/ota_manifest.py",
+    "tools/firmware_release.py"
   ]
 }

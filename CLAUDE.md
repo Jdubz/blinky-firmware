@@ -16,31 +16,11 @@ This file contains **critical behavior rules only** for the firmware (nRF52840, 
 
 **NEVER use `arduino-cli upload` or `adafruit-nrfutil dfu serial` on nRF52840.** The DFU serial protocol has race conditions that can brick devices, requiring SWD hardware to recover.
 
-**Flashing connected devices: every deploy must run deploy.sh's hardened pipeline.** What's required is the mechanisms, not the script's name:
-- a **stable release only**, downloaded and sha256-verified (`tools/firmware_release.py download`);
-- an **explicit target list** (or `all`), with every ID validated;
-- the **single flash path** (`FleetManager.flash_device` / `flash_fleet`), with auto-recovery armed for exactly the targets;
-- `restore_runtime_settings` + `save`;
-- the **post-deploy assertion** (exact version, audio counters, no error/DFU state).
+**Fleet devices are flashed only through blinky_time's deploy pipeline:** its `scripts/deploy.sh` (an explicit `--devices=<ids|all|list>` target is required), or `POST /api/fleet/deploy` on blinky-server, which runs the same modules. blinky_time's `CLAUDE.md` lists what that pipeline must keep: a **stable release only**, downloaded and sha256-verified (this repo's `tools/firmware_release.py download`); an **explicit target list**, every ID validated; the **single flash path** (`FleetManager.flash_device`); `restore_runtime_settings` + `save`; and the **post-deploy assertion** (exact version, audio counters, no error/DFU state). Dropping any of them is forbidden. Nothing in this repo flashes a fleet device.
 
-Dropping any of these is what's forbidden. Two entry points run all of them:
-- `./scripts/deploy.sh` from a workstation;
-- `POST /api/fleet/deploy` on blinky-server (`blinky_server/firmware/deploy_pipeline.py`, the same modules; #269). It never compiles, and never flashes a local build.
-
-Direct `curl` against the low-level `/api/fleet/upload`, `/api/fleet/flash`, or `/api/devices/{id}/command` with a device-mutating command (`device upload`, `reboot`) skips the pipeline, so it's forbidden. The server enforces this with an `X-Deploy-Tool` header that only `deploy.sh` sets: manual curl gets 403, and the API key alone isn't enough. When adding a new deploy path, build it on the same modules rather than reimplementing or skipping a step. From a workstation, use:
-
-`./scripts/deploy.sh` requires an explicit `--devices` target — passing `all`, an explicit comma-separated list of device IDs, or `list` to enumerate candidates. Unscoped fleet flashes were removed in PR #140 after the cart_inner brick incident.
-
-```bash
-./scripts/deploy.sh --devices=all                   # latest STABLE release → all devices + verify
-./scripts/deploy.sh --devices=cart_inner,cart_outer # scope to a subset
-./scripts/deploy.sh --devices=list                  # show candidates and exit
-./scripts/deploy.sh --devices=ID --release b214     # a specific STABLE release (deploy.sh is stable-only, #251)
-```
+Direct `curl` against blinky-server's low-level flash routes, or `/api/devices/{id}/command` with a device-mutating command (`device upload`, `reboot`), skips the pipeline and is forbidden. The server refuses it without the `X-Deploy-Tool` header that only `deploy.sh` sets.
 
 Candidates and `--dev` builds go only through `tools/deploy_local.py` to a test device on this machine's USB. Staging builds go only through the test box's staging suite (`POST /api/test/staging`, or `/api/fleet/deploy-staging`: test devices only, a server started with `--staging`).
-
-deploy.sh runs the full pipeline (select firmware → upload → flash → version-verify) and fails loud on any error. Bypassing it (even just to "save time") loses the version-verify step that catches partial flashes.
 
 ## Branches: staging before master (#349)
 
@@ -58,7 +38,7 @@ The flow:
 
 **Firmware that isn't stable** (candidates, and `--dev` builds of a clean tree, versioned `bN-dev-<sha>`) goes to exactly one device listed in `devices/test_devices.json`. The deploy tools refuse every other device. Never flash an uncommitted or unreleased build to any other device "just to try it": that is how b210 (12 fps) and b211 (silent mic) reached the hat.
 
-**The deploy.sh-only rule is broader than firmware flashing.** It also covers any sequence of API calls that mutates persistent device state or device lifecycle: `device upload` (writes config to flash), `reboot`, `wipe_device_identity` (and its deprecated aliases `factory` / `reset`), fleet-wide config sweeps that loop over multiple settings, etc. Even though those go through `/api/devices/{id}/command` (not `/api/fleet/upload`), running them in an ad-hoc loop without a tested workflow leaves devices in `error`/`connecting` states and requires manual recovery. The server enforces this for the destructive subset (`device upload`, `reboot`, `wipe_device_identity`, `factory`, `reset` — see `blinky_server/api/deps.py:_DEPLOY_GATED_COMMAND_LIST` for the canonical list); for everything else the discipline is on the operator. **If a real test needs different device configurations, build firmware variants with each config baked in and deploy each via `deploy.sh` — do NOT script API config flips on running fleet devices.**
+**blinky_time's deploy.sh-only rule is broader than firmware flashing.** It also covers any sequence of API calls that mutates persistent device state or device lifecycle: `device upload` (writes config to flash), `reboot`, `wipe_device_identity` (and its deprecated aliases `factory` / `reset`), fleet-wide config sweeps that loop over multiple settings, etc. Even though those go through `/api/devices/{id}/command` (not `/api/fleet/upload`), running them in an ad-hoc loop without a tested workflow leaves devices in `error`/`connecting` states and requires manual recovery. The server enforces this for the destructive subset (`device upload`, `reboot`, `wipe_device_identity`, `factory`, `reset` — see `blinky_server/api/deps.py:_DEPLOY_GATED_COMMAND_LIST` for the canonical list); for everything else the discipline is on the operator. **If a real test needs different device configurations, build firmware variants with each config baked in and deploy each via `deploy.sh` — do NOT script API config flips on running fleet devices.**
 
 **Bare-chip recovery only:** `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` (use when a device is bricked and not yet enrolled in the fleet).
 
@@ -74,9 +54,9 @@ Use `--dry-run` first. If an identity check refuses the drive, the bootloader ti
 
 **A personal device, from a browser (anyone, no repo):** `blinky-time.joshwentworth.com/#firmware` (blinky-console `FirmwarePage`; live since 2026-10-21 (PR #266), USB only. The Firebase deploy sets `VITE_FIRMWARE_UPDATES=on`, and removing that is the kill switch). It installs **stable releases only**, through the device's **signed OTA** path over USB (Web Serial; Bluetooth/NUS is built but hidden, `BLE_UPDATES_ENABLED`, until it passes on hardware): an Ed25519-signed manifest, then the image staged in QSPI while the old firmware runs, then `ota commit` (re-verified) and the bootloader installs it. It runs deploy_local.py's gates in the browser, except the uptime holds: it waits for 75 s of uptime (not 5 min 15 s) before resetting, since signed OTA only runs on b215+, whose reboot counter counts only fault resets (not the soft reset `ota commit` ends in); it watches the first 75 s after an update in the background instead of blocking. Don't weaken a gate in `blinky-console/src/services/firmware/` or `blinky-things/ota/` without changing the matching Python tool first. It is not a fleet-ops tool; use deploy.sh for the fleet. Design, bench results, rollout checklist and open items: `docs/WEB_FLASHER.md`.
 
-**Release signing key:** the private key is the secret `BLINKY_RELEASE_SIGNING_KEY` of the GitHub environment `release-signing` (branch policy: `master` only, so no other branch's workflow can read it; never make it a repository secret), used only by `sign-release.yml`, plus the maintainer's offline backup. **Only gated releases are signed:** every device installs a validly signed newer build, so `release_promote.py` has CI sign a release only after its bench gate passes; candidates are never signed. Its public half is compiled into the firmware (`blinky-things/ota/OtaKeys.h`); `firmware_release.py sign` refuses any other key. Never sign a dev or test build with it: bench the update path with `scripts/build.sh --dev --ota-bench-key` and the bench key (`~/.blinky/ota-bench-key.pem`). Losing the release key means devices can never accept a signed update again; rotating it means shipping, signed with the old key, a firmware that carries the new public key.
+**Release signing key:** the private key is the secret `BLINKY_RELEASE_SIGNING_KEY` of the GitHub environment `release-signing` (branch policy: `master` only, so no other branch's workflow can read it; never make it a repository secret), used only by `sign-release.yml`. No offline backup has been verified to exist; make one only to a recipient the owner gives, pinned in a reviewed workflow, never through a dispatch input. **Only gated releases are signed:** every device installs a validly signed newer build, so `release_promote.py` has CI sign a release only after its bench gate passes; candidates are never signed. Its public half is compiled into the firmware (`blinky-things/ota/OtaKeys.h`); `firmware_release.py sign` refuses any other key. Never sign a dev or test build with it: bench the update path with `scripts/build.sh --dev --ota-bench-key` and the bench key (`~/.blinky/ota-bench-key.pem`). Losing the release key means devices can never accept a signed update again; rotating it means shipping, signed with the old key, a firmware that carries the new public key.
 
-blinky-server owns all serial/BLE connections — no port contention. See `docs/SAFETY.md` for the full safety model, `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md` for BLE DFU details.
+blinky-server owns all serial/BLE connections on its host — no port contention. Its safety model is blinky_time's `docs/SAFETY.md`; BLE DFU details are in blinky_time's `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md`.
 
 **The test box** (its blinky-server, deployer and staging runner) is blinky_time's; its rules are in that repo's `CLAUDE.md`. Here, what matters is that the box's staging runner tests this repo's `staging` head and posts the `Hardware test (staging)` status that `master` requires.
 
@@ -120,7 +100,7 @@ Rules:
 - **Between any two resets** (CDC `reboot`, CDC `bootloader`, SWD reset, UF2 drop), insert **at least one full 60-second uptime window** so `markStable()` fires and clears the counter.
 - **Don't chain `device upload` + `reboot` + `device upload` + `reboot`** to "verify persistence" — that's the exact pattern that trips the trap. Upload once, wait >60s, optionally do one verification reboot, then wait >60s again.
 - **If a previously-configured device boots into safeMode unexpectedly**, the watchdog quarantine is the most likely cause. Recovery, in order — do NOT shortcut to ad-hoc UF2 drops or direct `curl` against the device API:
-  1. `./scripts/deploy.sh --devices=<id>` (or `--devices=<mac>` if not enrolled) → boots latest firmware to APP.
+  1. blinky_time's `./scripts/deploy.sh --devices=<id>` (or `--devices=<mac>` if not enrolled) → boots latest firmware to APP.
   2. Wait ≥75s of uptime so `SafeBootWatchdog::markStable()` fires and clears the RebootFrequencyCounter.
   3. Push the device config via the fleet API's `device upload` command — gated through deploy.sh's `X-Deploy-Tool` header (per the upload-safety section at the top of this file). If you have access only to local CDC, `device upload <JSON>` over `/dev/ttyACM0` is acceptable for the bench device but NEVER for an enrolled fleet device.
   4. Wait another ≥75s for the new config's first stable boot before any further reset.
@@ -196,7 +176,7 @@ When you discover a silent fallback, the fix is to (a) assert / panic at the fai
 ./scripts/build.sh --build N                # exact build number (release CI)
 ```
 
-Use `./scripts/deploy.sh` (stable by default) to flash devices.
+Devices get firmware through blinky_time's `./scripts/deploy.sh` (fleet, stable only) or `tools/deploy_local.py` (a device on this machine's USB).
 
 ## Device Workflow Discipline
 
@@ -224,12 +204,13 @@ Reviews and analysis must focus on **outstanding actions**, not documenting past
 | `docs/AUDIO_ARCHITECTURE.md` | AudioTracker, FrameOnsetNN, PLP, spectral analysis |
 | `docs/AUDIO-TUNING-GUIDE.md` | Main testing guide, tunable params, test procedures |
 | `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` | Published onset/drum-detection systems with F1 numbers, architectures, label sources — quote this before claiming "the literature says X" |
-| `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
+| blinky_time `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern; animations keep absolute time (`FrameClock`, physics substeps) |
 | `docs/HARDWARE.md` | XIAO nRF52840 Sense hardware specs |
 | `docs/NEXTGEN_ESP32S3_PLAN.md` | Next-gen fixtures on the XIAO ESP32-S3 Sense: dual-core architecture (renderer has priority, audio listener on the other core), carry-over, risks, bench gates |
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |
-| `docs/SAFETY.md` | Flashing safety mechanisms |
+| `docs/DEVELOPMENT.md` | Firmware development: platform code, `SETTINGS_VERSION`, config safety, review checklist |
+| blinky_time `docs/SAFETY.md` | Flashing safety mechanisms (deploy.sh, blinky-server's single flash path) |
 | `docs/RELEASE_PROCESS.md` | Firmware release channels (stable / candidate / dev), cutting, gating, promoting and rolling back releases |
 | `docs/WEB_FLASHER.md` | Browser firmware updates (`#firmware`, live, USB only) via signed QSPI OTA: signing, release mirror, checks, bench results, rollout checklist, open items |
 | `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |

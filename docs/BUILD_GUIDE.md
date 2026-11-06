@@ -9,7 +9,7 @@
 
 > ESP32-S3 support for the current fleet was cut in March 2026. All active development targets the nRF52840.
 
-**CRITICAL**: Never use `arduino-cli upload` or `adafruit-nrfutil dfu serial` on the nRF52840. They can brick the device. How to put firmware on a device is in [Flashing](#flashing) below and in [SAFETY.md](SAFETY.md).
+**CRITICAL**: Never use `arduino-cli upload` or `adafruit-nrfutil dfu serial` on the nRF52840. They can brick the device. How to put firmware on a device is in [Flashing](#flashing) below and in blinky_time's [SAFETY.md](https://github.com/Jdubz/blinky_time/blob/master/docs/SAFETY.md).
 
 ---
 
@@ -63,7 +63,7 @@ This installs everything into `<repo>/.arduino/` (gitignored):
 
 | Situation | Tool |
 |-----------|------|
-| Fleet devices (through blinky-server) | `./scripts/deploy.sh --devices=<ids or all>` (stable releases only) |
+| Fleet devices (through blinky-server) | blinky_time's `./scripts/deploy.sh --devices=<ids or all>` (stable releases only) |
 | A device on this machine's USB | `python tools/deploy_local.py --port COMx --device-id <id>` (stable by default; `--dev` / candidates only on a test device in `devices/test_devices.json`) |
 | A personal device, from a browser | `blinky-time.joshwentworth.com/#firmware`, see [WEB_FLASHER.md](WEB_FLASHER.md) |
 | A bricked bare chip, not yet in the fleet | `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` |

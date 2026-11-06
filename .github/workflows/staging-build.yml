@@ -9,6 +9,14 @@
 # "Hardware test (staging)" status on the commit. A PR staging -> master
 # needs that status.
 #
+# It also posts the "Firmware fingerprint" status: one sha256 over the hex and
+# UF2 that `package` makes from the sketch compiled with every per-commit field
+# fixed (scripts/build.sh --fingerprint). Those are exactly the files a staging
+# build or candidate ships, so two commits with the same fingerprint put the
+# same image on a device: the box skips the hardware suite for a head whose
+# fingerprint equals the one master was last merged from, and release.yml cuts
+# no candidate for one equal to the newest bN's. That image is never uploaded.
+#
 # workflow_run runs this file from the default branch (staging).
 name: Staging build
 
@@ -21,6 +29,7 @@ on:
 permissions:
   contents: read
   actions: read
+  statuses: write   # the Firmware fingerprint status
 
 concurrency:
   group: staging-build-${{ github.event.workflow_run.head_sha }}
@@ -37,7 +46,7 @@ jobs:
 
     steps:
     - name: Checkout the validated commit
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
       with:
         ref: ${{ github.event.workflow_run.head_sha }}
 
@@ -55,6 +64,28 @@ jobs:
       run: |
         pip install adafruit-nrfutil pyserial
         bash scripts/setup_toolchain.sh
+
+    # Fixed version fields and its own build/cache paths (scripts/build.sh): shares no
+    # object with the real build below. A commit from before --fingerprint has none.
+    - name: Fingerprint build
+      id: fp
+      run: |
+        if ! grep -q -- '--fingerprint)' scripts/build.sh; then
+          echo "::notice title=Fingerprint::this commit's build.sh has no --fingerprint; none posted"
+          exit 0
+        fi
+        bash scripts/build.sh --fingerprint
+        # The same validators and UF2 conversion as the real package step; the manifest
+        # (version, toolchain) is not part of the fingerprint.
+        python tools/firmware_release.py package --dev \
+          --hex /tmp/blinky-fingerprint/out/blinky-things.ino.hex \
+          --build 0 --sha 0000000000000000000000000000000000000000 \
+          --out /tmp/blinky-fingerprint/dist --toolchain-json '{}' \
+          --libraries-json /tmp/blinky-fingerprint/out/libraries.json
+        fp=$(cd /tmp/blinky-fingerprint/dist && sha256sum blinky-things-b0.hex blinky-things-b0.uf2 | sha256sum | cut -d' ' -f1)
+        [[ "$fp" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::bad fingerprint '$fp'"; exit 1; }
+        echo "fingerprint=$fp" >> "$GITHUB_OUTPUT"
+        echo "::notice title=Fingerprint::sha256:$fp"
 
     # --dev: no bump, version b<N>-dev-<sha8> from BUILD_NUMBER and the commit.
     - name: Build firmware
@@ -80,6 +111,18 @@ jobs:
         grep -q "\"$want\"" blinky-things/types/Version.h || {
           echo "::error title=Staging build::Version.h does not carry $want"; cat blinky-things/types/Version.h; exit 1; }
         ls -la dist
+
+    # Before the upload: the box only reads a fingerprint once the image exists, so posting
+    # it first means the image is never visible without its fingerprint.
+    - name: Post the fingerprint
+      if: steps.fp.outputs.fingerprint != ''
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SHA: ${{ github.event.workflow_run.head_sha }}
+        FP: ${{ steps.fp.outputs.fingerprint }}
+      run: |
+        gh api -X POST "repos/${{ github.repository }}/statuses/$SHA" \
+          -f state=success -f context="Firmware fingerprint" -f description="sha256:$FP" >/dev/null
 
     - name: Upload
       uses: actions/upload-artifact@v4

@@ -1,5 +1,7 @@
 # Web Updater (blinky-time.joshwentworth.com/#firmware)
 
+> **Where things live (blinky_time#357).** The firmware side (signed OTA in `blinky-things/ota/`, signing, the release mirror in `tools/firmware_release.py`) is this repo's. The page, its checks, the console deploy (`blinky-console/`, `.github/workflows/blinky-console-deploy.yml`) and `scripts/deploy.sh` are [blinky_time](https://github.com/Jdubz/blinky_time)'s; paths below under those names are in that repo.
+
 Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout, one device per update. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
 
 > **Status (2026-10-21): live, USB only, since PR #266.** The Firebase deploy builds with `VITE_FIRMWARE_UPDATES=on` (`.github/workflows/blinky-console-deploy.yml`), which turns on `FIRMWARE_UPDATES_ENABLED` (`blinky-console/src/MainShell.tsx`). To hide the page again, remove that env line and redeploy. Bluetooth is built but hidden (`BLE_UPDATES_ENABLED = false` in `FirmwarePage.tsx`). A person updated a device end to end (`b211-dev` → b215) on 2026-10-20. The owner turned it on with checklist item 2 open and item 4 parked; recovery over USB on Windows is still limited (see [Recovery](#recovery)). `blinkytime.joshwentworth.com` (no hyphen) redirects here.
@@ -46,7 +48,7 @@ Before any public page or nearby Bluetooth central could reach that path, it had
 
 ### Signing
 
-- **Release key.** The private key is the secret `BLINKY_RELEASE_SIGNING_KEY` of the GitHub **environment** `release-signing`, whose branch policy allows only `master`. A repository secret would be readable from any pushed branch. It is used only by `sign-release.yml`. The maintainer keeps an offline backup; losing the key means devices can never take a signed update again. The public key is compiled into the firmware (`ota/OtaKeys.h`). `firmware_release.py sign` refuses any key whose public half differs from it.
+- **Release key.** The private key is the secret `BLINKY_RELEASE_SIGNING_KEY` of this repo's GitHub **environment** `release-signing`, whose branch policy allows only `master`. A repository secret would be readable from any pushed branch. It is used only by `sign-release.yml`. No offline backup has been verified; losing the key means devices can never take a signed update again. The public key is compiled into the firmware (`ota/OtaKeys.h`). `firmware_release.py sign` refuses any key whose public half differs from it.
 - **Owners need no key.** Their devices carry only the public key.
 - **Only gated releases are signed.** Every device installs a validly signed newer build, so the signature is what makes a build installable everywhere. Candidates are never signed. `release_promote.py` dispatches `sign-release.yml`, which refuses without a passing bench-gate record for exactly that version. It attaches `.bin` + `.otam` and updates `manifest.json`. Promotion then re-verifies the signature itself before tagging the release stable.
 - **Rotation.** Ship, signed with the old key, a firmware whose `OtaKeys.h` carries the new public key.
