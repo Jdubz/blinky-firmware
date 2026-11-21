@@ -58,8 +58,8 @@ Respect the 60-second rule between resets (CLAUDE.md). Any step failing, or the 
 
 ## 6. Open work
 
-- [ ] Fork CI merged; release variant byte-identical to the committed fleet UF2 (provenance).
-- [ ] First tagged release `bl-0.8.0-10` from that build; blinky-firmware switches to the release pin and stops committing the UF2.
+- [x] Fork CI merged (Jdubz/Adafruit_nRF52_Bootloader#2, 2026-11-21). Builds are reproducible: two runs of one commit give identical ELF/hex/UF2/zip. Provenance: the CI build of 0.8.0-10 matches the committed fleet UF2 except for the version string and `__DATE__`/`__TIME__` bytes.
+- [ ] First tagged release (`bl-*`, cut with the next bootloader change: tags must contain the workflow, so 0.8.0-10 itself can't be re-released under its own version string); blinky-firmware switches to the release pin and stops committing the UF2.
 - [ ] Gate runner in blinky_time's test-box code (`scripts/testbox/`), built on `swd_recover.sh`, `deploy-bootloader.sh`, `uhubctl` and the BLE DFU tool; posts status to the fork.
 - [ ] Enumeration-loop watchdog that powers off the port.
 - [ ] Repeat the no-app DFU test (gate step 5) on a working XIAO. 06ACEB's 3V3 rail failed (2026-11-21), so the earlier bench evidence can't be trusted.
