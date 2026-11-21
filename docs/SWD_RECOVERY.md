@@ -89,10 +89,11 @@ reset (CLAUDE.md, 60-second rule).
   - The chip was off the bus. The kernel logged `error -71` and `device not accepting address`, then disabled the port.
   - It carried bootloader 0.8.0-4-g76d1e60 and an **empty app region**: build b190 had been dropped as a UF2 onto 0.8.0-4, whose UF2 path silently fails to write while the SoftDevice is enabled (see `bootloader/README.md`).
   - MBR and S140 were byte-identical to the official 7.3.0 image.
-- **The reset loop:** with no valid app the bootloader enters dual-transport DFU, starting both the SoftDevice and USB. About 150 ms later it reboots, every time, so USB never finishes enumerating. Fault capture (§2) on **both 0.8.0-4 and fleet 0.8.0-10** showed `id=0x1001 APP_MEMACC`, `pc=0xF99AC` (TinyUSB task code), `info=1`. The MWU registers agreed: `EVENTS_PREGION[0].WA=1`, `PERREGION[0].SUBSTATWA=0x1`. So **something writes CLOCK/POWER (0x40000000–0x40000FFF) directly while the SoftDevice is enabled**; it faults and the bootloader resets.
-  - TinyUSB's HFCLK code is ruled out: it is SoftDevice-aware and built with `SOFTDEVICE_PRESENT`.
-  - The exact store is not yet identified. Nordic's rule is that every CLOCK/POWER write goes through `sd_power_*` / `sd_clock_*` while the SoftDevice is enabled.
-  - **Impact: the fleet bootloader reset-loops with no USB whenever the app is missing or invalid.** Its BLE side resets every ~150 ms too, so BLE recovery is doubtful as well. Bench tests always entered DFU from a running app, so they never hit this path.
+- **The reset loop (cause not yet found):** with no valid app the bootloader enters dual-transport DFU (SoftDevice + USB). A clean test on 2026-11-21 (cold power-on through the hub, read-only SWD) showed **14 resets in 8 s**, so the loop is real and not caused by the debugger. What is known:
+  - Each reset follows the host's enumeration: the device enumerates, the host detects USB mass storage, then the device disconnects (`can't set config #1, error -32`, or SCSI READ(10) failing) and re-enumerates. When the kernel gives up on the port (`Cannot enable`), the host stops talking and **the loop stops**.
+  - RAM survives each reset (so it isn't power-on/brown-out). RESETREAS stays 0, `C_DEBUGEN` gets cleared, the bootloader fault handler's BKPT doesn't fire, and hardware breakpoints on every SYSRESETREQ site (bootloader `NVIC_SystemReset`, the `SystemInit` reset, the MBR's and the SoftDevice's reset code) didn't fire. That last capture ran while the kernel had disabled the port, so it needs repeating while the host is enumerating.
+  - **Retracted:** an earlier capture showed `NRF_FAULT_ID_APP_MEMACC` (SUBSTATWA=0x1, a CLOCK/POWER write). Those runs followed debugger writes to POWER registers (RESETREAS clears, and a mis-addressed write to DCDCEN0), and a clean cold-boot capture showed no fault. Treat MEMACC as a debugger artifact unless it reproduces cleanly. A static census of the bootloader binary found no CLOCK/POWER store that runs after the SoftDevice is enabled.
+  - Next step: an instrumented debug build of the fork (`DEBUG=1`, RTT logging), built in CI, with a control experiment (a second known-good XIAO, and this XIAO on plain USB without the Debug Mate) to separate firmware from bench-setup effects. b217 on this chip also failed USB enumeration (descriptor read timeouts) on the same setup, which points at the setup too.
 - **Recovery:** CTRL-AP erase, then golden image (MBR + S140 7.3.0 + bootloader 0.8.0-10-g4c5faae + UICR + b217 + settings), verified OK. The chip boots b217 directly; `probe` shows 0 resets.
 - **Traps hit:**
   - A killed OpenOCD survived and held the probe, which made the target look dead.
@@ -101,7 +102,7 @@ reset (CLAUDE.md, 60-second rule).
 
 ## 5. Open items
 
-- Find and fix the direct CLOCK/POWER write in the dual-transport DFU path. Rebasing the fork onto upstream (PR #396 at least) is also worth doing for the blank-settings-page fallback.
+- Root-cause the no-app DFU reset loop in our fork (instrumented build + control experiment, above) and fix it there.
 - Update the Debug Mate firmware (USB serial fix) so pyOCD works and several probes can be told apart.
 - A per-port switchable USB hub for real per-chip power cycling in the box.
 
