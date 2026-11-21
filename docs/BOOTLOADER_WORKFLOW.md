@@ -56,6 +56,20 @@ Respect the 60-second rule between resets (CLAUDE.md). Any step failing, or the 
 - **Never hot-swap** the XIAO in the Debug Mate while powered (Seeed guidance).
 - **Run one OpenOCD at a time** (`swd_recover.sh` enforces it). Never write POWER/CLOCK registers from the debugger while the SoftDevice may be running.
 
+## 5a. Boards: Sense and Sense Plus
+
+New devices and the test chip are XIAO nRF52840 **Sense Plus**; the legacy fleet is the plain **Sense**. **Every bootloader and firmware build must run on both.** From Seeed's netlists (2026-11-21):
+- **Every pin we use is identical:** QSPI flash P0.20–P0.25, PDM mic (P1.00/P0.16, power P1.10), IMU, LEDs P0.26/P0.30/P0.06, reset/DFU P0.18, P0.03, both crystals, and D0–D10. The bootloader's `xiao_nrf52840_ble_sense` definition fits both, and so does the app built for `xiaonRF52840Sense`.
+- **The Plus adds 9 castellated edge pads (D11–D19).** D16 is P0.31 (battery sense) and D14/D15 are the NFC pins. The battery divider is 499k on the Plus vs 510k on the Sense (about 1.4%).
+- **Never drive P0.17** (charger status). The Plus schematic labels its charger BQ25100, probably wrongly. **Never enable REG0 DC/DC** (`DCDCEN0`); REG1 DC/DC (`DCDCEN`) is fine.
+- **Identity:**
+  - A fresh Plus enumerates as `2886:8065` with its factory app and `2886:0065` in its factory bootloader. Once our bootloader and app are installed, it reports `0x8045`/`0x0045`, like a Sense.
+  - Legacy Sense units on Seeed's 0.6.1 bootloader report Board-ID `Seeed_XIAO_nRF52840_Sense`, not `nRF52840-SeeedXiaoSense-v1`.
+  - The tools accept both PID sets (blinky-firmware #40).
+  - **No hardware strap distinguishes the boards.** If the variant matters, record it while the factory bootloader is still there (e.g. a UICR CUSTOMER word).
+- **Debug Mate seating:** the J21 contact block lands only on the SWDIO/SWCLK/RST/GND pads of both boards, and on bare solder mask for the ESP32-only BOOT/MTCK contacts. The extra J5/J2 rows can't reach a seated XIAO. Both boards are safe to seat (from Seeed's footprints). **Leave the 5V and 3V3 header pins unsoldered.**
+- **The gate runs on the Plus test chip.** A release also needs one check on a legacy Sense (identity matching, and the 0.6.1-bootloader Board-ID path) until the fleet is uniform.
+
 ## 6. Open work
 
 - [x] Fork CI merged (Jdubz/Adafruit_nRF52_Bootloader#2, 2026-11-21). Builds are reproducible: two runs of one commit give identical ELF/hex/UF2/zip. Provenance: the CI build of 0.8.0-10 matches the committed fleet UF2 except for the version string and `__DATE__`/`__TIME__` bytes.
