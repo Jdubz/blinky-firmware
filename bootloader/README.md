@@ -206,6 +206,12 @@ UF2/serial mode was requested. All wired recovery paths still work.
 
 ## Rebuilding
 
+**CI builds it** (since 2026-11-21): the fork's `.github/workflows/blinky-bootloader.yml` on `blinky-local-patches` builds a release and a debug (RTT) variant of `xiao_nrf52840_ble_sense` on every push/PR, with arm-none-eabi-gcc 9-2019-q4. It also runs `tools/verify_bootloader.py` and uploads the ELF, linker map, hexes, UF2s, DFU zip and SHA256SUMS. Builds are reproducible: `SOURCE_DATE_EPOCH` is the commit time and the zip is repacked, so the same commit always builds the same bytes. A `bl-*` tag publishes a GitHub Release. The plan is for this repo to pin a release by tag and sha256 instead of committing binaries (`docs/BOOTLOADER_WORKFLOW.md`).
+
+The board definition fits both the XIAO nRF52840 Sense and the Sense Plus: every pin it uses is identical (`docs/BOOTLOADER_WORKFLOW.md` §5a).
+
+Local build (same result, minus the reproducibility pins):
+
 ```bash
 git submodule update --init --recursive bootloader/src
 cd bootloader/src
@@ -248,9 +254,16 @@ as an audit concern; this section is the answer.
 
 The local fork is published at `Jdubz/Adafruit_nRF52_Bootloader`, branch
 `blinky-local-patches`, and pinned here as the `bootloader/src`
-submodule. A future PR should add a build matrix in CI that
-rebuilds the artifacts from that commit and diffs against the committed
-binaries to prove no manual tampering.
+submodule.
+
+**Provenance verified (2026-11-21).** The fork's CI built the same source
+(fork PR #2, run 44958246562). Its update UF2 matches the committed
+`update-bootloader-qspi-ota-default.uf2` byte for byte, except for the
+version string (`0.8.0-12-…` vs `0.8.0-10-g4c5faae`, from `git describe`
+on the CI merge commit) and the `__DATE__`/`__TIME__`-derived bytes: the
+INFO_UF2 "Date:" line and 35 bytes of ghostfat FAT-timestamp constants
+at 0xF88C0–0xF8920. The block layout is identical. So the fleet binary is
+this source built with this toolchain, with no other changes.
 
 ## Critical Fixes (applied to upstream v0.10.0)
 

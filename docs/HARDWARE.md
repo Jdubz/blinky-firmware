@@ -2,6 +2,10 @@
 
 Hardware reference for Blinky Time controllers. The canonical, authoritative list of supported devices is in `devices/registry/*.json` — this doc summarises the recurring patterns.
 
+## Boards: XIAO nRF52840 Sense and Sense Plus
+
+The legacy fleet is the plain **XIAO nRF52840 Sense**; new devices (and the test box chip) are the **Sense Plus**. One bootloader and one firmware image run on both: every pin they use (QSPI flash, PDM mic, IMU, LEDs, reset/DFU, D0–D10) is identical in Seeed's netlists. The Plus adds 9 castellated edge pads (D11–D19). A fresh Plus enumerates as `2886:8065` with its factory app and `2886:0065` in its factory bootloader. Once our bootloader and app are on it, it reports `0x8045`/`0x0045` like a Sense, and the tools accept both. Details: `docs/BOOTLOADER_WORKFLOW.md` §5a.
+
 ## Device Configurations (nRF52840 XIAO Sense)
 
 Current registered devices (see `devices/registry/`):
@@ -35,11 +39,22 @@ The nRF52840 Sense also has 2 MB of external QSPI flash. Signed OTA updates stag
 ```
 nRF52840 XIAO Sense Pinout:
 ├── D10 (GPIO) → LED Data Pin
-├── 3V3 → LED Power (VCC)
+├── 3V3 → LED Power (VCC)   (small battery strings only; see below)
 ├── GND → LED Ground
 ├── Built-in Mic → Audio input
 └── Built-in IMU → Motion sensing
 ```
+
+The XIAO's 3.3 V regulator supplies about 250 mA, enough only for a short, dim string. Larger layouts power the LEDs from their own 5 V supply sized for the LED count, join that supply's ground to the XIAO's GND at one point, and keep only data (with a ~330 Ω series resistor at the strip) and the ground reference on the XIAO.
+
+### Test box LED grid
+
+The test box chip drives an 8x8 grid. It sits in a XIAO Debug Mate, so:
+- data comes from D10, through the Debug Mate's D10 header pin (a direct wire; avoid D6/D7, which go through its UART switch);
+- the grid has its own 5 V supply (64 LEDs at full white is ~3.8 A). The Debug Mate's socket "GND" is a current-sense shunt and its 5 V is rated 1 A, so it never powers LEDs;
+- 330 Ω in series with data at the grid, and ~1000 µF across the grid's input.
+
+Wiring and the rest of the bench: blinky_time `docs/TEST_BOX_BUILD_PLAN.md`.
 
 ### Power Requirements
 - **LED Current**: ~60mA per LED at full brightness
