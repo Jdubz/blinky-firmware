@@ -69,6 +69,8 @@ import firmware_release  # noqa: E402  (stable/candidate download, test-device l
 VID = 0x2886
 APP_PID = 0x8045
 BL_PID = 0x0045
+# The Sense Plus's factory firmware uses 0x8065 (bootloader 0x0065).
+APP_PIDS = uf2_upload.BOARD_PROFILES["nrf52840"]["normal_pids"]
 DRIVE_LABEL = "XIAO-SENSE"
 HEX = "/tmp/blinky-build/blinky-things.ino.hex"  # POSIX; cygwin_to_native() maps it on Windows
 STABLE_UPTIME_MS = 75_000      # CLAUDE.md: wait >= 75 s so markStable() fires
@@ -124,7 +126,7 @@ def port_info(port):
 
 def find_app_port(usb_serial):
     for p in serial.tools.list_ports.comports():
-        if p.vid == VID and p.pid == APP_PID and (p.serial_number or "").upper() == usb_serial:
+        if p.vid == VID and p.pid in APP_PIDS and (p.serial_number or "").upper() == usb_serial:
             return p.device
     return None
 
@@ -257,7 +259,7 @@ def preflight(args):
     p = port_info(args.port)
     if p is None:
         raise DeployError(f"{args.port} not present", 6)
-    if p.vid != VID or p.pid != APP_PID:
+    if p.vid != VID or p.pid not in APP_PIDS:
         raise DeployError(f"{args.port} is VID:PID {p.vid:04X}:{p.pid:04X}, not an nRF52840 "
                           f"XIAO in app mode ({VID:04X}:{APP_PID:04X})", 6)
     usb_serial = (p.serial_number or "").upper()

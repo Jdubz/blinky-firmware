@@ -36,6 +36,18 @@ xiao_pid() {
     done
 }
 
+# App mode: 8045, or 8065 on a Sense Plus still running Seeed's factory app.
+is_app() { case "$(xiao_pid)" in 8045|8065) return 0 ;; esac; return 1; }
+
+wait_app() {
+    local timeout=$1
+    for w in $(seq 1 $timeout); do
+        sleep 1
+        is_app && echo "$w" && return 0
+    done
+    return 1
+}
+
 dfu_drive() {
     for d in /media/$USER/XIAO-SENSE; do
         [ -d "$d" ] && echo "$d" && return
@@ -95,7 +107,7 @@ echo "iter   time     outcome   flash_status                                ms_t
 echo "----   ------   -------   ------------------------------------------- ---------"
 
 # Ensure we start in APP mode
-if [ "$(xiao_pid)" != "8045" ]; then
+if ! is_app; then
     echo "WARN: not in APP at start (pid=$(xiao_pid))"
 fi
 
@@ -104,7 +116,7 @@ for i in $(seq 1 $ITERATIONS); do
     iter_t0=$(date +%s.%N)
 
     # Enter DFU
-    if [ "$(xiao_pid)" = "8045" ]; then
+    if is_app; then
         TTY=$(ls /dev/serial/by-id/usb-Seeed_XIAO_nRF52840_Sense_*-if00 2>/dev/null | head -1)
         if [ -n "$TTY" ]; then
             python3 -c "
@@ -132,7 +144,7 @@ except: pass
 
     # Wait for outcome
     outcome="STUCK"
-    if w=$(wait_pid 8045 $WAIT_TIMEOUT); then
+    if w=$(wait_app $WAIT_TIMEOUT); then
         outcome="PASS"
         done_t=$(date +%s.%N)
         dt_ms=$(echo "($done_t - $drop_t) * 1000" | bc -l | awk '{printf "%.0f", $1}')
@@ -158,7 +170,7 @@ except: pass
         # Recover via re-drop
         cp "$FW_UF2" "$DRV2/" 2>/dev/null
         sync
-        wait_pid 8045 20 >/dev/null
+        wait_app 20 >/dev/null
         sleep 2
     fi
 done

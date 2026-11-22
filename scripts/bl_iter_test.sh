@@ -12,7 +12,7 @@
 #   1. Enter DFU mode via serial 'bootloader' command (if in app mode)
 #      OR GPIO18 reset + retry if needed
 #   2. Drop firmware UF2 to the mounted XIAO-SENSE drive
-#   3. Wait for transition to APP mode (pid 8045) within WAIT_TIMEOUT
+#   3. Wait for transition to APP mode (pid 8045/8065) within WAIT_TIMEOUT
 #   4. Report pass/fail, time, BL version
 #
 # Run with ITERATIONS=N to characterize hiccup rate. Self-heal calls
@@ -54,6 +54,18 @@ dfu_drive() {
     return 1
 }
 
+# App mode: 8045, or 8065 on a Sense Plus still running Seeed's factory app.
+is_app() { case "$(xiao_pid)" in 8045|8065) return 0 ;; esac; return 1; }
+
+wait_for_app() {
+    local timeout=$1
+    for w in $(seq 1 $timeout); do
+        sleep 1
+        is_app && echo "$w" && return 0
+    done
+    return 1
+}
+
 wait_for_pid() {
     local want=$1
     local timeout=$2
@@ -70,7 +82,7 @@ wait_for_pid() {
 # Enter DFU via serial 'bootloader' cmd; fall back to GPIO18 reset
 enter_dfu() {
     local tty=$(xiao_ttyacm)
-    if [ -n "$tty" ] && [ "$(xiao_pid)" = "8045" ]; then
+    if [ -n "$tty" ] && is_app; then
         python3 -c "
 import serial,time
 try:
@@ -150,7 +162,7 @@ for i in $(seq 1 $ITERATIONS); do
     drop_done=$(date +%s.%N)
 
     # Wait for APP transition
-    if w=$(wait_for_pid 8045 $WAIT_TIMEOUT); then
+    if w=$(wait_for_app $WAIT_TIMEOUT); then
         done_t=$(date +%s.%N)
         dt=$(echo "$done_t - $drop_t" | bc -l)
         times+=("$dt")
@@ -167,7 +179,7 @@ for i in $(seq 1 $ITERATIONS); do
         if [ -n "$DRV2" ]; then
             cp "$FW_UF2" "$DRV2/"
             sync
-            wait_for_pid 8045 20 >/dev/null && echo "  [recover] re-drop succeeded" || \
+            wait_for_app 20 >/dev/null && echo "  [recover] re-drop succeeded" || \
                 echo "  [recover] FAILED — needs manual intervention"
         fi
     fi

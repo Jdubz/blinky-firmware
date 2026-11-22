@@ -262,7 +262,7 @@ cleanup_mount "$WE_MOUNTED"
 # --- Wait for re-enumeration ---
 echo "  waiting for device to reboot..."
 sleep 5  # BL self-flash + reboot
-# Wait for APP mode pid 8045 OR new DFU mount
+# Wait for APP mode (pid 8045, or 8065 = a Sense Plus still on Seeed's factory app) OR new DFU mount
 PID=""
 POST_BL=""
 for w in $(seq 1 30); do
@@ -272,7 +272,7 @@ for w in $(seq 1 30); do
             PID=$(cat $dp/idProduct 2>/dev/null)
         fi
     done
-    [ "$PID" = "8045" ] && break
+    case "$PID" in 8045|8065) break ;; esac
     # A new DFU volume means the BL is up. Look for it afresh each time: on the headless
     # path the copy's temp mountpoint is gone and nothing auto-mounts the volume the
     # rebooted BL presents, so mount it ourselves (#211). Until the device re-enumerates
@@ -294,8 +294,8 @@ done
 # --- Safety 3: post-flash verification ---
 echo
 echo "Result:"
-if [ "$PID" = "8045" ]; then
-    echo "  device returned to APP mode (pid=8045) — app booted on a working BL"
+if [ "$PID" = "8045" ] || [ "$PID" = "8065" ]; then
+    echo "  device returned to APP mode (pid=$PID) — app booted on a working BL"
     # Returning to APP proves *a* working BL is present, but NOT that OURS
     # landed — the app could have booted on the OLD BL if the copy silently
     # failed. Re-enter BL briefly to read INFO_UF2.TXT and CONFIRM the version
@@ -333,7 +333,7 @@ s.close()
             fi
         else
             cleanup_mount "$VERIFY_MOUNTED"
-            echo "WARNING: app booted (pid=8045) but could not re-read INFO_UF2.TXT" >&2
+            echo "WARNING: app booted (pid=$PID) but could not re-read INFO_UF2.TXT" >&2
             echo "         to confirm the new BL version. Verify manually before sealing." >&2
         fi
     else
