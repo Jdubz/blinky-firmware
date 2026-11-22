@@ -29,7 +29,7 @@ Channels and the release flow: [RELEASE_PROCESS.md](RELEASE_PROCESS.md). Don't d
 
 ### Recovery (nRF52840 bricked by DFU upload)
 
-A Raspberry Pi Zero W at `swd-flash.local` is provisioned for SWD recovery (see CLAUDE.md for invocation). It has the known-good fleet bootloader, MBR, and SoftDevice S140 7.3.0 hex files staged. Use this as the recovery of last resort when a device drops off USB and isn't reachable via BLE.
+Test chips on the test box recover over SWD through their XIAO Debug Mate: `scripts/swd_recover.sh` (see [SWD_RECOVERY.md](SWD_RECOVERY.md)). A Raspberry Pi Zero W at `swd-flash.local` is provisioned for SWD recovery (see CLAUDE.md for invocation). It has the known-good fleet bootloader, MBR, and SoftDevice S140 7.3.0 hex files staged. Use this as the recovery of last resort when a device drops off USB and isn't reachable via BLE.
 
 ### Unresponsive Device Runbook
 
