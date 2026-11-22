@@ -119,7 +119,9 @@ cmd_restore() {
 
     if [ $backup -eq 1 ]; then
         echo "== backup"
-        cmd_backup "$work/backup" || echo "WARNING: backup failed (chip may be looping too fast to halt); continuing" >&2
+        # Subshell: cmd_backup's die must fail only the backup, not the restore.
+        ( cmd_backup "$work/backup" ) \
+            || echo "WARNING: backup failed (chip may be looping too fast to halt); continuing" >&2
     fi
 
     echo "== CTRL-AP mass erase"

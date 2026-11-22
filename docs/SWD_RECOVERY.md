@@ -102,9 +102,14 @@ reset (CLAUDE.md, 60-second rule).
   - A wrong-address register write landed in DCDCEN0 (§2).
   - Halt-and-resume captures reported a SoftDevice assert that the capture itself caused.
 
+### Bench lessons (2026-11-21)
+
+- **Cutting only the XIAO's hub port is not a cold boot while the Debug Mate is attached.** A core left halted by an SWD session stayed halted through a 3 s VBUS cut: the SWD lines (SWDIO pulled up) kept the idle chip alive. End every SWD session with the core running (`reset run`; `swd_recover.sh restore` does), and for a real power-on reset cut both ports (the XIAO's and the Debug Mate's).
+- **blinky-server won't auto-recover a device within 30 minutes of a UF2 write to it** (the existing cascade guard). A test that flashes a chip and then breaks it waits that long before recovery starts; a real failure doesn't hit it.
+
 ## 5. Open items
 
-- Root-cause the no-app DFU reset loop in our fork (instrumented build + control experiment, above) and fix it there.
+- ~~Root-cause the no-app DFU reset loop~~: none on a healthy board (§4, "Resolved").
 - Update the Debug Mate firmware (USB serial fix) so pyOCD works and several probes can be told apart.
 - A per-port switchable USB hub for real per-chip power cycling in the box.
 
