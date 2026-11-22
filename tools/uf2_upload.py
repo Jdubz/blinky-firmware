@@ -64,6 +64,11 @@ BOARD_PROFILES = {
         "normal_pid":     0x8045,
         "bootloader_vid": 0x2886,
         "bootloader_pid": 0x0045,
+        # Every PID a blinky XIAO can show. The Sense Plus's factory firmware
+        # and bootloader use 0x8065/0x0065; once our bootloader and app are on
+        # it, it reports 0x8045/0x0045 like a plain Sense.
+        "normal_pids":     (0x8045, 0x8065),
+        "bootloader_pids": (0x0045, 0x0065),
         "uf2_family_id":  "0xADA52840",
         "drive_label":    "XIAO-SENSE",
         "firmware_ext":   ".hex",       # compile output; converted via uf2conv
@@ -75,6 +80,8 @@ BOARD_PROFILES = {
         "normal_pid":     0x1001,   # Espressif native USB CDC (verified: lsusb COM43)
         "bootloader_vid": 0x303A,   # TO VERIFY: check `lsusb` after double-tap reset
         "bootloader_pid": 0x0002,   # TO VERIFY: ESP32-S3 ROM download mode PID
+        "normal_pids":     (0x1001,),
+        "bootloader_pids": (0x0002,),
         "uf2_family_id":  "0xc47e5767",
         "drive_label":    "ESP32S3", # TO VERIFY: check `lsblk` in UF2 bootloader mode
         "firmware_ext":   ".bin",       # arduino-esp32 compile output
@@ -89,6 +96,7 @@ _active_board = BOARD_PROFILES["nrf52840"]
 # --- Hardware constants (derived from active board — kept for backwards compat) ---
 NORMAL_VID = 0x2886
 NORMAL_PID = 0x8045
+NORMAL_PIDS = BOARD_PROFILES["nrf52840"]["normal_pids"]
 BOOTLOADER_VID = 0x2886
 BOOTLOADER_PID = 0x0045
 
@@ -705,10 +713,10 @@ def find_all_xiao_ports(board=None):
     """
     profile = board or _active_board
     vid = profile["normal_vid"]
-    pid = profile["normal_pid"]
+    pids = profile["normal_pids"]
     ports = []
     for p in serial.tools.list_ports.comports():
-        if p.vid == vid and p.pid == pid:
+        if p.vid == vid and p.pid in pids:
             stable_path = _resolve_by_id_path(p.device)
             ports.append(stable_path)
     return sorted(ports)
@@ -728,7 +736,8 @@ def get_serial_number(port):
 
 
 def find_port_by_serial(serial_number, target_pid=None):
-    """Find a serial port matching a USB serial number and optional PID.
+    """Find a serial port matching a USB serial number and optional PID
+    (one PID, or a collection of acceptable PIDs).
 
     Returns the stable /dev/serial/by-id/ path if available.
     """
@@ -736,7 +745,8 @@ def find_port_by_serial(serial_number, target_pid=None):
         return None
     for p in serial.tools.list_ports.comports():
         if p.serial_number == serial_number:
-            if target_pid is None or p.pid == target_pid:
+            if target_pid is None or p.pid in (
+                    target_pid if isinstance(target_pid, (tuple, list, set, frozenset)) else (target_pid,)):
                 return _resolve_by_id_path(p.device)
     return None
 
@@ -868,7 +878,7 @@ def _recover_usb_port(hub_path, port_num, device_serial=None, verbose=False):
     while time.monotonic() < deadline:
         time.sleep(0.5)
         if device_serial:
-            new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pid"])
+            new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pids"])
             if new_port:
                 print(f"  Device recovered on {new_port}")
                 return new_port
@@ -927,13 +937,13 @@ def _check_port_available(port, verbose=False):
         return False
 
     exp_vid = _active_board["normal_vid"]
-    exp_pid = _active_board["normal_pid"]
+    exp_pids = _active_board["normal_pids"]
     bl_vid = _active_board.get("bootloader_vid", exp_vid)
-    bl_pid = _active_board.get("bootloader_pid")
+    bl_pids = _active_board.get("bootloader_pids", ())
     board_name = _active_board["name"]
-    if port_info.vid != exp_vid or port_info.pid != exp_pid:
+    if port_info.vid != exp_vid or port_info.pid not in exp_pids:
         # Check if device is already in bootloader CDC mode
-        if port_info.vid == bl_vid and port_info.pid == bl_pid:
+        if port_info.vid == bl_vid and port_info.pid in bl_pids:
             print(f"\n  Device is in BOOTLOADER CDC mode (VID:PID {port_info.vid:#06x}:{port_info.pid:#06x})")
             print(f"  Will check for UF2 mass storage drive...")
             # Device is in bootloader — check if UF2 drive is already present
@@ -946,7 +956,7 @@ def _check_port_available(port, verbose=False):
                 print(f"  Try power-cycling the USB port to reset to application mode.")
             return False
         print(f"\n  ERROR: {port} is not a {board_name} in application mode!")
-        print(f"  Expected VID:PID {exp_vid:#06x}:{exp_pid:#06x}")
+        print(f"  Expected VID:PID {exp_vid:#06x}:{'/'.join(f'{x:#06x}' for x in exp_pids)}")
         print(f"  Found    VID:PID {port_info.vid:#06x}:{port_info.pid:#06x}" if port_info.vid else
               f"  Found    VID:PID None:None")
         print(f"  Port numbers may have shuffled after a previous flash.")
@@ -1050,7 +1060,7 @@ def trigger_bootloader(port, verbose=False):
 
             # Re-discover port — device may have re-enumerated on a new ACM
             if device_serial:
-                new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pid"])
+                new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pids"])
                 if new_port:
                     if new_port != current_port:
                         if verbose:
@@ -1774,7 +1784,7 @@ def verify_reboot(mount_point, port=None, device_serial=None, verbose=False):
             # Try by-id path first (most reliable after reboot)
             new_port = find_port_by_id_path(device_serial)
             if not new_port:
-                new_port = find_port_by_serial(device_serial, _active_board["normal_pid"])
+                new_port = find_port_by_serial(device_serial, _active_board["normal_pids"])
             if new_port:
                 print(f"  Device back on {new_port}")
                 break
@@ -1958,7 +1968,7 @@ def run_self_test():
     ]
     if xiao_ports:
         for p in xiao_ports:
-            mode = "app" if p.pid == NORMAL_PID else "bootloader"
+            mode = "app" if p.pid in NORMAL_PIDS else "bootloader"
             print(f"  [PASS] {p.device} serial={p.serial_number} ({mode})")
         passed += 1
     else:
@@ -2225,7 +2235,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     if not _device_port_exists(current_port):
                         sn = mount_map[port]["serial"]
                         if sn:
-                            new_port = find_port_by_serial(sn, target_pid=_active_board["normal_pid"])
+                            new_port = find_port_by_serial(sn, target_pid=_active_board["normal_pids"])
                             if new_port:
                                 print(f"    Device re-discovered on {new_port}")
                                 current_port = new_port
@@ -2418,7 +2428,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     continue
                 sn = device_serials.get(port)
                 if sn:
-                    new_port = find_port_by_serial(sn, _active_board["normal_pid"])
+                    new_port = find_port_by_serial(sn, _active_board["normal_pids"])
                     if new_port:
                         found[port] = new_port
                         print(f"  {port}: back on {new_port}")
