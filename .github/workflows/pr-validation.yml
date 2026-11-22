@@ -398,8 +398,18 @@ jobs:
 
     # Builds TFLite Micro for the host and links the harness with
     # BLINKY_HOST_NN, so FrameOnsetNN runs the embedded model (#203).
+    # Host compiler pinned to GCC 13: ubuntu-latest moved to 26.04 (default
+    # GCC 15.2) in Nov 2026, and the flatbuffers headers bundled with the
+    # pinned TFLite library (TFLITE_REF in tools/setup_tflite_lib.sh) don't
+    # compile under GCC 15 ("EndVector/VerifyOffset was not declared"). The
+    # library pin stays as is: the device firmware builds from it too.
     - name: Build harness with the real onset NN
-      run: bash tests/tracker/build_host_nn.sh --out build/host_nn
+      env:
+        CXX: g++-13
+      run: |
+        command -v "$CXX" >/dev/null || { echo "::error::$CXX is not on this runner image"; exit 1; }
+        "$CXX" --version | head -1
+        bash tests/tracker/build_host_nn.sh --out build/host_nn
 
     - name: Stress run with the NN path
       run: python tests/tracker/run_stress.py --harness build/host_nn/tracker_harness_nn
