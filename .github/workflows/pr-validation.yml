@@ -153,7 +153,7 @@ jobs:
     - name: Release gate beat-pace arithmetic
       run: |
         pip install pytest pyserial
-        python -m pytest -v tests/tools/test_release_gate.py tests/tools/test_staging_download.py
+        python -m pytest -v tests/tools/test_release_gate.py tests/tools/test_staging_download.py tests/tools/test_uf2_upload_ports.py
 
   static-init-safety:
     name: Static Init Safety Check

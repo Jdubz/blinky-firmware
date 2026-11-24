@@ -40,6 +40,12 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError
 
 try:
+    import termios  # POSIX only; pyserial's tcflush raises termios.error, not OSError
+    _TERMIOS_ERRORS = (termios.error,)
+except ImportError:  # Windows (COM ports): pyserial raises SerialException there
+    _TERMIOS_ERRORS = ()
+
+try:
     import serial
     import serial.tools.list_ports
 except ImportError:
@@ -203,6 +209,24 @@ def _serial_open_with_timeout(port, baudrate=115200, timeout=1, open_timeout=Non
         signal.signal(signal.SIGALRM, old_handler)
 
 
+def _same_port(a, b):
+    """True when two serial port paths name the same device node.
+
+    blinky-server reports its stable /dev/serial/by-id/... symlink, while this tool is
+    usually given the /dev/ttyACMn it points to (or the other way round), so both sides are
+    resolved. Comparing only this tool's side missed every server device, so the release
+    and its reconnect hold never happened (test box, 2026-11-23).
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return False
+
+
 def _request_server_release(port, verbose=False, hold_seconds=None):
     """Ask blinky-server to release a device on the given port.
 
@@ -220,13 +244,10 @@ def _request_server_release(port, verbose=False, hold_seconds=None):
             print(f"  blinky-server not reachable at {BLINKY_SERVER_URL} (OK if not running)")
         return True  # Server not running — nothing to release
 
-    real_port = str(Path(port).resolve()) if Path(port).is_symlink() else port
-
     # Find device on this port
     device_id = None
     for dev in devices:
-        dev_port = dev.get("port", "")
-        if dev_port == port or dev_port == real_port:
+        if _same_port(dev.get("port", ""), port):
             device_id = dev.get("id")
             break
 
@@ -263,11 +284,8 @@ def _request_server_reconnect(port, verbose=False):
     except (URLError, OSError, json.JSONDecodeError):
         return  # Server not running
 
-    real_port = str(Path(port).resolve()) if Path(port).is_symlink() else port
-
     for dev in devices:
-        dev_port = dev.get("port", "")
-        if dev_port == port or dev_port == real_port:
+        if _same_port(dev.get("port", ""), port):
             device_id = dev.get("id")
             try:
                 req = Request(
@@ -1126,9 +1144,11 @@ def trigger_bootloader(port, verbose=False):
                     gpregret_val = response.split('GPREGRET=0x')[-1].split()[0].strip()
                     if gpregret_val.upper() != '57':
                         print(f"  WARNING: GPREGRET={gpregret_val} (expected 57 for UF2 mode)")
-            except (serial.SerialException, OSError):
+            except (serial.SerialException, OSError, *_TERMIOS_ERRORS):
                 pass  # Device may have already reset — expected
-        except (serial.SerialException, OSError, BrokenPipeError) as e:
+        except (serial.SerialException, OSError, BrokenPipeError, *_TERMIOS_ERRORS) as e:
+            # termios.error (EIO from tcflush) when the chip re-enumerated under us: retry
+            # like any other serial error instead of aborting the whole upload.
             if verbose:
                 print(f"  Serial error: {e}")
             continue
