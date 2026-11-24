@@ -122,8 +122,12 @@ public:
             return false;
         }
 
-        // Generate the mapping based on orientation and wiring pattern
-        generateMapping();
+        // Generate the mapping based on orientation and wiring pattern.
+        // An orientation with no mapping fails begin(); the caller halts loudly.
+        if (!generateMapping()) {
+            cleanup();
+            return false;
+        }
         return true;
     }
 
@@ -179,7 +183,7 @@ private:
         }
     }
 
-    void generateMapping() {
+    bool generateMapping() {
         if (orientation == VERTICAL) {
             // Vertical column-major zigzag pattern (tube lights)
             // Each column is a continuous strip of `height` LEDs.
@@ -270,7 +274,22 @@ private:
                     setMapping(x, y, ledIndex);
                 }
             }
-        } else {
+        } else if (orientation == HORIZONTAL_ROTATED_180) {
+            // HORIZONTAL turned 180 degrees (a panel mounted upside down):
+            // data enters at the bottom-right, each row runs right to left,
+            // rows go bottom to top, no serpentine.
+            //
+            // 4x3 example:
+            //   Row 0 (top):     LEDs 11 10  9  8
+            //   Row 1:           LEDs  7  6  5  4
+            //   Row 2 (bottom):  LEDs  3  2  1  0
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    int ledIndex = (height - 1 - y) * width + (width - 1 - x);
+                    setMapping(x, y, ledIndex);
+                }
+            }
+        } else if (orientation == HORIZONTAL) {
             // Standard row-major mapping (horizontal layouts like bucket totem)
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
@@ -278,6 +297,11 @@ private:
                     setMapping(x, y, ledIndex);
                 }
             }
+        } else {
+            // No silent fallback: an orientation without a mapping here is a
+            // bug (DeviceConfigLoader::validate should have refused it).
+            return false;
         }
+        return true;
     }
 };
