@@ -87,10 +87,10 @@ An installed sculpture has no reachable reset button, USB port or SWD pads, so a
 |---|---|---|
 | T1 | Erase the app, power-cycle: the device advertises BLE DFU on its own and the fleet server reflashes it | F1 |
 | T2 | An image that crashes in `setup()`: 3 strikes trigger BLE DFU and the fleet recovers it | F3 |
-| T3 | An image that runs 10 s then faults: the reboot-frequency counter triggers recovery after 5 boots | F4 |
-| T4 | T3 with a power cycle between every crash: it still triggers | F4 |
+| T3 | An image that runs past the 60 s `markStable()` window, then faults with a watchdog or lockup reset before the counter's 5-minute clear: after 5 such boots the flash counter enters BLE DFU, and the stored device config is quarantined (`quarantineDeviceConfig()`). A fault before 60 s is F3's case, so it doesn't exercise this. | F4 |
+| T4 | T3 with a power cycle between every crash: it still triggers. Only fault resets count, so the power cycles themselves don't. | F4 |
 | T5 | Start a BLE DFU upload, drop the link partway, power-cycle: the device comes back in BLE DFU | F1 |
-| T7 | QSPI `ota commit` with a bad CRC: the old app boots normally | QSPI staging |
+| T7 | Signed QSPI OTA: (a) a chunk with a bad CRC is rejected while staging; (b) a staged image whose SHA-512 doesn't match the signed manifest is refused by `ota commit`. In both cases the old app keeps running. | QSPI staging |
 | T8 | A full fleet flash over BLE DFU completes and the device reconnects | BLE DFU |
 
 **Residual risk** (no software mitigation; low probability, one sculpture each):
