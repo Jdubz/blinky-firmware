@@ -132,7 +132,25 @@ static void testOffClearsAFlashTrain() {
     CHECK(!tp.active() && tp.recorded() == 0 && !tp.done());
 }
 
+// show() can hand a frame off late (waiting on the previous DMA): the on time runs from the
+// stamped hand-off, not from when update() decided to light.
+static void testOnTimeRunsFromTheStampedHandOff() {
+    TestPattern tp;
+    CHECK(tp.flash(255, 255, 255, 30, 200, 1, 0));
+    tp.update(200);  // decides to light
+    tp.shown(212);   // the frame actually went out 12 ms later
+    tp.update(235);  // 35 ms after the decision, 23 after the hand-off: still lit
+    CHECK(!tp.done());
+    tp.shown(235);
+    tp.update(242);  // 30 ms after the hand-off
+    tp.shown(243);
+    CHECK(tp.done());
+    CHECK(tp.recorded() == 1);
+    CHECK(tp.edge(0).onMs == 212 && tp.edge(0).offMs == 243);
+}
+
 int main() {
+    testOnTimeRunsFromTheStampedHandOff();
     testOffSolidPixel();
     testFlashRefusesBadParameters();
     testFlashScheduleAndStamps();

@@ -81,10 +81,10 @@ Generator class names have no `Generator` suffix (`Fire`, not `FireGenerator`). 
 | `testpattern solid R G B` | every pixel one colour | levels, LED PWM |
 | `testpattern pixel X Y R G B` | one pixel lit (logical coordinates), the rest dark | region map, orientation, dead or stuck LEDs |
 | `testpattern flash R G B ON_MS PERIOD_MS COUNT` | all pixels on for `ON_MS`, `COUNT` times (at most 256), one every `PERIOD_MS` plus up to half of it (irregular, so it can't phase-lock to the camera) | the camera's timing reference |
-| `testpattern status` | JSON: mode, `done`, `millis`, `pixels`, `usPerPixel`, and `edges`: `[on, off]` per flash, the `millis()` when that frame was handed to the LEDs | reading a flash train back |
+| `testpattern status` | JSON: mode, `done`, `millis`, `pixels`, `strands`, `usPerPixel`, `latchUs`, and `edges`: `[on, off]` per flash, the `millis()` when that frame was handed to the LEDs | reading a flash train back |
 | `testpattern off` | back to the generator | |
 
-A flash edge is stamped right after `show()` queues the frame. The LEDs latch it after the DMA, about `pixels × usPerPixel` µs later (2 ms for 64 LEDs). The host puts edges on its own clock with the serial clock sync (`millis` offset).
+A flash edge is stamped right after `show()` queues the frame. The LEDs latch it after the DMA, `latchUs` later: the pixels per strand × 30 µs (2 ms for 64 LEDs on one strand; `ledPin2` splits them across two strands sent at once). A flash stays lit for at least `ON_MS` from its stamped hand-off. The host puts edges on its own clock with the serial clock sync (`millis` offset).
 
 ## Base Interfaces
 

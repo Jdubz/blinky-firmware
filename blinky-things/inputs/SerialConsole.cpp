@@ -896,10 +896,21 @@ bool SerialConsole::handleTestCommand(const char* cmd) {
         out_.print(tp.done() ? F("true") : F("false"));
         out_.print(F(",\"millis\":"));
         out_.print(millis());
-        // The LEDs latch the frame after its DMA: 24 bits at 800 kHz per pixel.
+        // The LEDs latch the frame after its DMA: 24 bits at 800 kHz per pixel. With ledPin2
+        // the pixels split evenly across two strands sent at the same time.
+        if (!configStorage_ || !configStorage_->isDeviceConfigValid()) {
+            out_.println(F(",\"error\":\"no device config: strand count unknown\"}"));
+            return true;
+        }
+        const int strands = configStorage_->getDeviceConfig().ledPin2 != 0 ? 2 : 1;
+        const int perStrand = (m.getTotalPixels() + strands - 1) / strands;
         out_.print(F(",\"pixels\":"));
         out_.print(m.getTotalPixels());
-        out_.print(F(",\"usPerPixel\":30,\"edges\":["));
+        out_.print(F(",\"strands\":"));
+        out_.print(strands);
+        out_.print(F(",\"usPerPixel\":30,\"latchUs\":"));
+        out_.print(perStrand * 30);
+        out_.print(F(",\"edges\":["));
         for (int i = 0; i < tp.recorded(); i++) {
             if (i) out_.print(',');
             out_.print('[');

@@ -91,10 +91,10 @@ public:
         if (!lit_ && remaining_ > 0 && reached(nowMs, nextOnMs_)) {
             lit_ = true;
             pendingOn_ = true;
-            offAtMs_ = nowMs + onMs_;  // lit for at least onMs from the frame it came on
+            offAtMs_ = 0;  // set in shown(), from when the lit frame actually went out
             nextOnMs_ += periodMs_ + jitter();
             remaining_--;
-        } else if (lit_ && reached(nowMs, offAtMs_)) {
+        } else if (lit_ && !pendingOn_ && reached(nowMs, offAtMs_)) {
             lit_ = false;
             pendingOff_ = true;
         }
@@ -121,6 +121,9 @@ public:
     void shown(uint32_t nowMs) {
         if (pendingOn_) {
             if (recorded_ < MAX_FLASHES) edges_[recorded_].onMs = nowMs;
+            // Lit for at least onMs from the frame's real hand-off (show() can wait on the
+            // previous frame's DMA), so the off edge measures the time the LEDs were on.
+            offAtMs_ = nowMs + onMs_;
             pendingOn_ = false;
         }
         if (pendingOff_) {
