@@ -1125,33 +1125,43 @@ def trigger_bootloader(port, verbose=False):
             print(f"  Serial open error: {e}")
             continue
 
+        sent_then_lost = False
         try:
-            ser.reset_input_buffer()
-            ser.write(b'bootloader\n')
-            ser.flush()
-            # Read response IMMEDIATELY — the device's Serial.flush() needs
-            # the host to drain the TX buffer. A blocking read() keeps the
-            # USB IN pipe active. On fixed firmware (no Serial.flush), the
-            # device resets instantly and this read gets whatever arrived.
             try:
-                response = ser.read(500).decode('utf-8', errors='replace').strip()
-                if response and verbose:
-                    for line in response.split('\n'):
-                        line = line.strip()
-                        if line:
-                            print(f"    {line}")
-                if 'GPREGRET=0x' in response:
-                    gpregret_val = response.split('GPREGRET=0x')[-1].split()[0].strip()
-                    if gpregret_val.upper() != '57':
-                        print(f"  WARNING: GPREGRET={gpregret_val} (expected 57 for UF2 mode)")
-            except (serial.SerialException, OSError, *_TERMIOS_ERRORS):
-                pass  # Device may have already reset — expected
-        except (serial.SerialException, OSError, BrokenPipeError, *_TERMIOS_ERRORS) as e:
-            # termios.error (EIO from tcflush) when the chip re-enumerated under us: retry
-            # like any other serial error instead of aborting the whole upload.
-            if verbose:
-                print(f"  Serial error: {e}")
-            continue
+                ser.reset_input_buffer()
+            except (serial.SerialException, OSError, *_TERMIOS_ERRORS) as e:
+                # Nothing sent yet: the port went stale (the chip re-enumerated under us,
+                # termios EIO). Retry with a fresh open like any other serial error.
+                if verbose:
+                    print(f"  Serial error: {e}")
+                continue
+            try:
+                ser.write(b'bootloader\n')
+                ser.flush()
+                # Read response IMMEDIATELY — the device's Serial.flush() needs
+                # the host to drain the TX buffer. A blocking read() keeps the
+                # USB IN pipe active. On fixed firmware (no Serial.flush), the
+                # device resets instantly and this read gets whatever arrived.
+                try:
+                    response = ser.read(500).decode('utf-8', errors='replace').strip()
+                    if response and verbose:
+                        for line in response.split('\n'):
+                            line = line.strip()
+                            if line:
+                                print(f"    {line}")
+                    if 'GPREGRET=0x' in response:
+                        gpregret_val = response.split('GPREGRET=0x')[-1].split()[0].strip()
+                        if gpregret_val.upper() != '57':
+                            print(f"  WARNING: GPREGRET={gpregret_val} (expected 57 for UF2 mode)")
+                except (serial.SerialException, OSError, *_TERMIOS_ERRORS):
+                    pass  # Device may have already reset — expected
+            except (serial.SerialException, OSError, BrokenPipeError, *_TERMIOS_ERRORS) as e:
+                # The command may have reached the chip, which then reset into its
+                # bootloader and broke the port: fall through to the drive check rather
+                # than retry (a retry could power-cycle a chip already in UF2 mode).
+                sent_then_lost = True
+                if verbose:
+                    print(f"  Serial error after sending bootloader (chip may have reset): {e}")
         finally:
             try:
                 ser.close()
@@ -1162,6 +1172,8 @@ def trigger_bootloader(port, verbose=False):
         # Total time across 15 retries stays reasonable.
         if _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=verbose):
             return device_serial
+        if sent_then_lost:
+            continue  # as before this check existed: no 1200-baud touch on a resetting chip
 
         # 1200-baud touch is first-attempt only. On the nRF52, the 1200-baud
         # touch forces a full USB disconnect/reconnect cycle. If it fails on

@@ -76,3 +76,75 @@ def test_reconnect_matches_the_servers_by_id_port_given_the_tty(
     assert [u for u, _ in server.posts] == [
         f"{uf2_upload.BLINKY_SERVER_URL}/api/devices/87DE9B58C90AFE2D/reconnect"
     ]
+
+
+# -- bootloader entry: a serial error after `bootloader` was sent ------------------------------
+
+
+class _Port:
+    """A serial handle whose flush fails like a chip resetting under it (termios EIO)."""
+
+    def __init__(self, fail_on: str) -> None:
+        self.fail_on = fail_on
+        self.writes: list[bytes] = []
+
+    def reset_input_buffer(self) -> None:
+        if self.fail_on == "reset":
+            raise uf2_upload._TERMIOS_ERRORS[0](5, "Input/output error")
+
+    def write(self, data: bytes) -> None:
+        self.writes.append(data)
+
+    def flush(self) -> None:
+        if self.fail_on == "flush":
+            raise uf2_upload._TERMIOS_ERRORS[0](5, "Input/output error")
+
+    def read(self, _n: int) -> bytes:
+        return b""
+
+    def close(self) -> None:
+        pass
+
+
+def _bootloader_entry(monkeypatch: pytest.MonkeyPatch, fail_on: str, drives: list[bool]) -> Any:
+    """trigger_bootloader with the host side faked: each attempt opens a fresh _Port, and
+    `drives` says whether each UF2 drive check finds the drive."""
+    if not uf2_upload._TERMIOS_ERRORS:
+        pytest.skip("termios is POSIX-only")
+    import serial_lock
+
+    opened: list[_Port] = []
+
+    def open_port(*_a: Any, **_k: Any) -> _Port:
+        opened.append(_Port(fail_on))
+        return opened[-1]
+
+    checks = iter(drives)
+    monkeypatch.setattr(uf2_upload, "_request_server_release", lambda *a, **k: True)
+    monkeypatch.setattr(serial_lock, "acquire", lambda *a, **k: True)
+    monkeypatch.setattr(uf2_upload, "_check_port_available", lambda *a, **k: True)
+    monkeypatch.setattr(uf2_upload, "get_serial_number", lambda _p: "87DE9B58C90AFE2D")
+    monkeypatch.setattr(uf2_upload, "_find_usb_hub_port", lambda _p: (None, None))
+    monkeypatch.setattr(uf2_upload, "_get_usb_block_devices", lambda: set())
+    monkeypatch.setattr(uf2_upload, "find_port_by_serial", lambda *a, **k: "/dev/ttyACM0")
+    monkeypatch.setattr(uf2_upload, "_serial_open_with_timeout", open_port)
+    monkeypatch.setattr(uf2_upload, "_wait_for_uf2_drive", lambda *a, **k: next(checks, False))
+    monkeypatch.setattr(uf2_upload.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(uf2_upload, "MAX_BOOTLOADER_RETRIES", 2)
+    return uf2_upload.trigger_bootloader("/dev/ttyACM0"), opened
+
+
+def test_an_error_after_sending_bootloader_still_checks_for_the_drive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The chip took `bootloader`, reset and broke the port mid-flush: its drive is there."""
+    serial, opened = _bootloader_entry(monkeypatch, "flush", drives=[True])
+    assert serial == "87DE9B58C90AFE2D"
+    assert len(opened) == 1 and opened[0].writes == [b"bootloader\n"]
+
+
+def test_eio_before_sending_retries_instead_of_aborting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stale port (EIO on the first call) is retried, not an uncaught crash."""
+    serial, opened = _bootloader_entry(monkeypatch, "reset", drives=[])
+    assert serial is None  # both attempts hit EIO; the caller reports the failure
+    assert len(opened) == 2 and all(p.writes == [] for p in opened)
