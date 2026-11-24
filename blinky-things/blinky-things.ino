@@ -131,6 +131,7 @@ FakeAudio fakeAudio;  // Synthetic 120 BPM audio for visual design/debug ("fakea
 void renderFrame() {
   // Generate -> Effect -> Render -> Display pipeline
   if (pipeline && audioController) {
+    pipeline->testPattern().update(millis());
     if (fakeAudio.isEnabled()) {
       AudioControl fakeCtrl = fakeAudio.getControl();
       pipeline->render(fakeCtrl);
@@ -139,6 +140,9 @@ void renderFrame() {
       pipeline->render(audio);
     }
     leds->show();
+    // The frame is now queued to the LEDs (non-blocking DMA; they latch ~30 us/LED later):
+    // stamp any test-pattern flash edge it carries.
+    pipeline->testPattern().shown(millis());
   }
 }
 

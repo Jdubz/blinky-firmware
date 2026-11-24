@@ -31,10 +31,4 @@ public:
      * Clear all LEDs
      */
     void clear();
-
-    /**
-     * Test pattern for verifying LED mapping
-     * @param pattern Test pattern type (0=corners, 1=gradient, 2=checkerboard)
-     */
-    void renderTestPattern(int pattern = 0);
 };

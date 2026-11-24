@@ -125,6 +125,18 @@ jobs:
           tests/unit/test_led_mapper.cpp -o build/test_led_mapper
         build/test_led_mapper
 
+    # testpattern (camera calibration): fills, and the flash train's schedule and edge stamps.
+    # PixelMatrix.cpp's existing -Wreorder / -Wclass-memaccess are relaxed for that file only.
+    - name: Test patterns (UBSan)
+      run: |
+        FLAGS="-std=c++17 -Wall -Wextra -Werror -O1 -g -fsanitize=undefined -fno-sanitize-recover=all \
+          -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840 -I blinky-simulator/include -I blinky-things \
+          -I blinky-things/types"
+        g++ $FLAGS -Wno-reorder -Wno-class-memaccess -c blinky-things/types/PixelMatrix.cpp -o build/PixelMatrix.o
+        g++ $FLAGS -c blinky-things/types/BlinkyAssert.cpp -o build/BlinkyAssert.o
+        g++ $FLAGS tests/unit/test_test_pattern.cpp build/PixelMatrix.o build/BlinkyAssert.o -o build/test_test_pattern
+        build/test_test_pattern
+
   timing:
     # Quoted: unquoted, YAML reads ` #259-#261)` as a comment and the check is named "...phase,".
     name: "Absolute Timing (generators + rhythm phase, #259-#261)"
