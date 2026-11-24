@@ -86,7 +86,7 @@ blinky-server owns all serial/BLE connections on its host — no port contention
 - `msc_uf2_check_stuck()` self-recovery (8s idle + incomplete → DFU_RESET → boot to app; converts permanent stuck into ~13s recovery)
 - App-handshake watchdog (OPEN_ISSUES §3.1): counter encoded as GPREGRET `0x1N` (hardware register, immune to firmware BSS-zero), bumped on every app-jump, cleared by firmware in `SafeBootWatchdog::begin()` and `markStable()`. After 3 consecutive misses (= pre-`begin()` crashes) BL forces DFU. Closes the "crashy-but-valid app" recovery gap. Earlier 0.8.0-9 RAM-based implementation was broken — counter at `0x20007F78` fell inside firmware `.bss` and was silently zeroed every boot.
 - Bench measurement: 30/30 PASS at 30s timeout, mean 9.4s per UF2 drop (vs. unbounded hangs on 0.8.0-5).
-See `docs/BOOTLOADER_PRODUCTION_AUDIT_2026_05_15.md` for the diagnostic narrative.
+Details: `bootloader/README.md`; development, gate and open work: `docs/BOOTLOADER_WORKFLOW.md`.
 
 ## Flashing through blinky-server
 
@@ -94,7 +94,7 @@ Fleet flashing goes through blinky-server's single flash entry point (`FleetMana
 
 ## CRITICAL: 60-second rule between device resets
 
-The firmware's `SafeBootWatchdog::markStable()` is **deferred to 60s of uptime** (`blinky-things.ino:613-614`) so that mid-init crashes still count toward the BLE-DFU recovery threshold (F3 in SCULPTURE_BLE_RECOVERY_PLAN.md). The corollary: **any sequence of resets faster than 60s apart bumps `RebootFrequencyCounter` and, at 5 cumulative trips, fires the quarantine hook (`configStorage.quarantineDeviceConfig()` in `.ino:189`)**. That hook flips `data_.device.isValid = false`, and the device boots into safeMode with `{"status":"unconfigured"}` the next time around — even though nothing actually crashed.
+The firmware's `SafeBootWatchdog::markStable()` is **deferred to 60s of uptime** (`blinky-things.ino:613-614`) so that mid-init crashes still count toward the BLE-DFU recovery threshold (F3 in `docs/BOOTLOADER_WORKFLOW.md` §5b). The corollary: **any sequence of resets faster than 60s apart bumps `RebootFrequencyCounter` and, at 5 cumulative trips, fires the quarantine hook (`configStorage.quarantineDeviceConfig()` in `.ino:189`)**. That hook flips `data_.device.isValid = false`, and the device boots into safeMode with `{"status":"unconfigured"}` the next time around — even though nothing actually crashed.
 
 This burns hours when you don't know about it: you flash a BL, drop a UF2, send `reboot` over CDC, do another `bootloader` cmd, etc. — each is a real reset, the counter accumulates silently, and the device suddenly forgets its config. Re-uploading the config via `device upload` works, but only if you THEN let uptime cross 60s before the next reset.
 
@@ -119,7 +119,7 @@ How strongly a hit shows is a separate, later layer: its weight in the learned r
 Concrete consequences:
 - **Score detectors on kicks and snares**, not on all onsets: kick/snare recall at ±30/±50 ms and the share of detections that land on a kick or snare, against cleaned `kick_weighted` labels. All-onset F1 at ±100 ms scored 0.68 while the hat looked "almost entirely random" (#280); it is a secondary number at most.
 - **Training labels must be onset-flavored drum labels** (`kick_weighted_drums`, `onsets_consensus`). Never use `consensus_v*` (beat tracker output) or anything from `allin1`/`beat_this`/`beatnet`/`demucs_beats` as a training target. Those directories are archived under `_archive_beats_2026_04_29/`. `prepare_dataset.py` refuses to load paths with those markers.
-- **Eval ground truth is onset labels**, never `.beats.json`. The blinky-server validation harness reads `.onsets_consensus.json` (required since 2026-04-29). Beat GT files were archived out of `blinky-test-player/music/edm/`.
+- **Eval ground truth is onset labels**, never `.beats.json`. The blinky-server validation harness reads `.onsets_consensus.json` (required since 2026-04-29). Beat GT files were archived out of the corpus (now `corpus/edm/`).
 - **Beat-tracking systems (allin1, beat_this, beatnet, demucs_beats, the BPM half of madmom)** still exist as reference scripts but their *output is beats* and must not flow into the training-label pipeline.
 - **BPM in firmware (PLP / ACF tempo tracking)** is fine: it phase-locks the visualizer animation and supplies period/phase to the rhythm-pattern layer. `beatGridPatternMin=0.0` (b149+ default) keeps the beat-grid AND-gate off.
 
@@ -198,21 +198,25 @@ Devices get firmware through blinky_time's `./scripts/deploy.sh` (fleet, stable 
 
 Reviews and analysis must focus on **outstanding actions**, not documenting past work.
 
+**Issue numbers:** this repo's issues started at #1 in the 2026-11-04 split. In docs and code comments, a bare number of 100 or more (#155, #280, PR #347, ...) is a blinky_time issue or PR from before the split. Firmware issues that moved got new numbers here (e.g. #340 → #8, #178 → #20).
+
 ## Documentation Index
 
 | Document | Purpose |
 |----------|---------|
-| `docs/VISUALIZER_GOALS.md` | Design philosophy — visual quality over metrics |
-| `docs/AUDIO_ARCHITECTURE.md` | AudioTracker, FrameOnsetNN, PLP, spectral analysis |
-| `docs/AUDIO-TUNING-GUIDE.md` | Main testing guide, tunable params, test procedures |
-| `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` | Published onset/drum-detection systems with F1 numbers, architectures, label sources — quote this before claiming "the literature says X" |
-| blinky_time `docs/AUDIO_SYSTEM_AUDIT_2026_04_24.md` | Point-in-time audit of training/firmware/validation pipelines with prioritized fix plan (tasks #77–#88) |
-| `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern; animations keep absolute time (`FrameClock`, physics substeps) |
-| `docs/HARDWARE.md` | XIAO nRF52840 Sense hardware specs |
-| `docs/NEXTGEN_ESP32S3_PLAN.md` | Next-gen fixtures on the XIAO ESP32-S3 Sense: dual-core architecture (renderer has priority, audio listener on the other core), carry-over, risks, bench gates |
+| `docs/VISUALIZER_GOALS.md` | Design philosophy (visual quality over metrics) and generator ideas not built yet |
+| `docs/AUDIO_ARCHITECTURE.md` | AudioTracker, SuperFlux onset path, PLP, spectral analysis, `repS`, what not to retry |
+| `docs/AUDIO-TUNING-GUIDE.md` | Every tunable parameter (the one place they are listed), metrics, test procedures |
+| `docs/GLOSSARY.md` | Musical, firmware and metric terms (drum hit vs onset vs beat, δ, `repS`) |
+| `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` | The papers the deployed onset design rests on, plus published onset/drum-detection systems for the shelved NN — quote this before claiming "the literature says X" |
+| `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator / Effect / Renderer pattern; animations keep absolute time (`FrameClock`, physics substeps); render safety |
+| `docs/HARDWARE.md` | XIAO nRF52840 Sense / Sense Plus, device layouts, test box grid wiring |
+| `docs/NEXTGEN_ESP32S3_PLAN.md` | Next-gen fixtures on the XIAO ESP32-S3 Sense: dual-core architecture (renderer has priority, audio listener on the other core), NN feasibility (P3), multi-platform code, risks, bench gates |
 | `docs/BUILD_GUIDE.md` | Build and installation instructions |
 | `docs/DEVELOPMENT.md` | Firmware development: platform code, `SETTINGS_VERSION`, config safety, review checklist |
 | blinky_time `docs/SAFETY.md` | Flashing safety mechanisms (deploy.sh, blinky-server's single flash path) |
 | `docs/RELEASE_PROCESS.md` | Firmware release channels (stable / candidate / dev), cutting, gating, promoting and rolling back releases |
-| `docs/WEB_FLASHER.md` | Browser firmware updates (`#firmware`, live, USB only) via signed QSPI OTA: signing, release mirror, checks, bench results, rollout checklist, open items |
-| `docs/SCULPTURE_BLE_RECOVERY_PLAN.md` | Pre-install brick-proofing for sealed sculpture devices: bootloader DEFAULT_TO_OTA_DFU + watchdog/SafeMode fixes |
+| `docs/WEB_FLASHER.md` | Browser firmware updates (`#firmware`, live, USB only) via signed QSPI OTA: signing, release mirror, checks, rollout checklist, open items |
+| `docs/WEB_UPDATE_RESEARCH_2026_10.md` | Research behind the web updater: platform constraints (iPhone, Windows UF2, Chrome's DFU blocklist) and the options weighed |
+| `docs/BOOTLOADER_WORKFLOW.md` | Bootloader fork, change flow, hardware gate, Sense / Sense Plus, sealed-device recovery layers and install checks, open work |
+| `docs/SWD_RECOVERY.md` | SWD recovery on the test box (XIAO Debug Mate + `scripts/swd_recover.sh`): probe and chip facts, procedure, bench lessons |

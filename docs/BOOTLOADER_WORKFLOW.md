@@ -3,7 +3,7 @@
 How the blinky bootloader is developed, built, released, tested and recovered.
 Owner decisions (2026-11-21):
 - The bootloader is **our fork**, maintained separately. Fix bugs there; don't file upstream or wait on Adafruit.
-- The test box has **one** XIAO nRF52840 Sense, seated in a XIAO Debug Mate. The Debug Mate is for debugging and recovery only.
+- The test box has **one** XIAO nRF52840 Sense Plus (87DE9B58C90AFE2D), seated in a XIAO Debug Mate. The Debug Mate is for debugging and recovery only.
 - Every normal process works over **USB alone, and preferably also BLE**.
 - **Everything is hands-off.** No step needs a person, and every validation runs on that one chip.
 
@@ -70,6 +70,37 @@ New devices and the test chip are XIAO nRF52840 **Sense Plus**; the legacy fleet
 - **Debug Mate seating:** the J21 contact block lands only on the SWDIO/SWCLK/RST/GND pads of both boards, and on bare solder mask for the ESP32-only BOOT/MTCK contacts. The extra J5/J2 rows can't reach a seated XIAO. Both boards are safe to seat (from Seeed's footprints). **Leave the 5V and 3V3 header pins unsoldered.**
 - **The gate runs on the Plus test chip.** A release also needs one check on a legacy Sense (identity matching, and the 0.6.1-bootloader Board-ID path) until the fleet is uniform.
 
+## 5b. Sealed devices: recovery layers, install checks, residual risk
+
+An installed sculpture has no reachable reset button, USB port or SWD pads, so a brick after install is a lost sculpture. The recovery layers, all landed (code comments cite them as F1–F6):
+- **F1** The bootloader is built with `DEFAULT_TO_OTA_DFU`: an invalid app, or any DFU entry that doesn't ask for UF2, ends in DFU with BLE (and USB, per the dual-transport invariant) advertising until a host pushes firmware.
+- **F2** The old USB-only `SafeMode` trap was deleted. No code path can leave the device in a loop without BLE.
+- **F3** `SafeBootWatchdog::markStable()` runs only after 60 s of uptime, so a crash after `setup()` still counts toward the 3-strikes BLE-DFU recovery. This is why CLAUDE.md's 60-second rule exists.
+- **F4** `hal/RebootFrequencyCounter` is flash-backed, so power cycles don't reset it. It counts fault resets only (watchdog or lockup, since b215); at the threshold it quarantines the device config and enters BLE DFU (see the header comment for its fail-safe modes).
+- **F5** BLE-DFU entry sets `GPREGRET = 0xA8` as well as the RAM magic (`SafeBootWatchdog.h`).
+- **F6** A failed `bleDfu.begin()` logs `[FALLBACK]` instead of failing silently.
+- On top of these, the 0.8.0-10 app-handshake watchdog forces DFU after 3 app boots without the firmware's `GPREGRET` clear, which closes the crashy-but-valid-app gap.
+
+**Install checks.** Run on every unit before it is sealed:
+
+| # | Check | Covers |
+|---|---|---|
+| T1 | Erase the app, power-cycle: the device advertises BLE DFU on its own and the fleet server reflashes it | F1 |
+| T2 | An image that crashes in `setup()`: 3 strikes trigger BLE DFU and the fleet recovers it | F3 |
+| T3 | An image that runs 10 s then faults: the reboot-frequency counter triggers recovery after 5 boots | F4 |
+| T4 | T3 with a power cycle between every crash: it still triggers | F4 |
+| T5 | Start a BLE DFU upload, drop the link partway, power-cycle: the device comes back in BLE DFU | F1 |
+| T7 | QSPI `ota commit` with a bad CRC: the old app boots normally | QSPI staging |
+| T8 | A full fleet flash over BLE DFU completes and the device reconnects | BLE DFU |
+
+**Residual risk** (no software mitigation; low probability, one sculpture each):
+- **Power loss during a bootloader self-update.** Don't update the bootloader on a sealed unit until #10 gives a safe BLE path.
+- **SoftDevice or bootloader flash corruption.** Validate SoftDevice and bootloader integrity before install.
+- **A BLE stack crash inside the bootloader's DFU session** (nRF52 errata). A pre-install soak catches most.
+- **Hardware failure** (flash wear, antenna, regulator).
+- **The DFU transport's inactivity timer** returns a valid-but-buggy app to its crash loop after a failed session. F4 re-enters DFU on a later boot, so the server gets repeated windows rather than one continuous one.
+- **The bootloader's legacy BLE DFU is unsigned** (SDK 11). The app's own update path is signed (`docs/WEB_FLASHER.md`).
+
 ## 6. Open work
 
 - [x] Fork CI merged (Jdubz/Adafruit_nRF52_Bootloader#2, 2026-11-21). Builds are reproducible: two runs of one commit give identical ELF/hex/UF2/zip. Provenance: the CI build of 0.8.0-10 matches the committed fleet UF2 except for the version string and `__DATE__`/`__TIME__` bytes.
@@ -81,3 +112,10 @@ New devices and the test chip are XIAO nRF52840 **Sense Plus**; the legacy fleet
 - [ ] SWD escalation in blinky-server: when USB recovery gives up, or the chip never enumerates, run `swd_recover.sh restore` and cold-boot both ports.
 - [x] SWD restore tier (`swd_recover.sh restore`) verified hands-off on 04F2A796: backup, CTRL-AP erase, golden image + verify, reset in 3.5 min; the chip came back on b217.
 - [ ] Debug Mate firmware with a USB serial number (source build), only if a second probe is ever added.
+- [ ] **Bootloader self-update over BLE** (#10), so a sealed device's bootloader is never stuck.
+- [ ] **BLE DFU negotiates MTU 23** (#11): 20-byte chunks, about 6.5 min per device.
+- [ ] **0.8.0-11, parked** (owner decision; draft fork PR Jdubz/Adafruit_nRF52_Bootloader#1, not flashed). It arms the stuck-transfer check only after a valid UF2 block, which fixes UF2 recovery from Windows. Rollout requirements are in `docs/WEB_FLASHER.md` (Recovery, and rollout checklist item 4).
+- [ ] Optional, no deadline:
+  - A UF2 first-write hook that sets `dfu_startup_packet_received`, so the 3 s startup timeout is cancelled by the MSC path too, not only by `tud_mounted()`.
+  - Replace `is_ota()` with `sd_softdevice_is_enabled()` wherever it really means "is the SoftDevice running?" (in dual-transport mode it is up regardless of the DFU trigger).
+  - Tune `MSC_STUCK_TIMEOUT_MS` (8000 in `msc_uf2.c`) if a host is found that legitimately pauses more than 8 s between WRITE10s in one transfer. 0.8.0-11 changes what re-arms this timer.

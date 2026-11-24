@@ -165,7 +165,12 @@ leds.show();
 - **Host (CI):** `tests/timing/timing_test.cpp` runs every generator under UBSan and checks absolute timing (the "Absolute Timing" job in `.github/workflows/pr-validation.yml`).
 - **Host (not in CI):** `tests/unit/` has older audio, fire and LED-mapper tests.
 - **On device, `ENABLE_TESTING` builds only:** `tests/GeneratorTestRunner`, `effects/tests/` and `render/tests/`. These aren't wired to serial commands; the old `generators` / `fire all` / `gen help` test commands no longer exist (`gen` now switches generators).
-- **Render safety:** see `docs/VISUALIZATION_SAFETY_TESTING.md`.
+
+### Render safety
+
+Runaway brightness can overheat LED controllers and the supply, so a frame must never accumulate onto the previous one. The guard is structural: `RenderPipeline::render()` clears the matrix at the start of every frame (`render/RenderPipeline.cpp`; commit 7999748 fixed a missing `clear()`), and `PixelMatrix` stores 8-bit channels, so no pixel can exceed RGB(255,255,255). Don't remove that `clear()` or widen the channel type without a replacement bound.
+
+`blinky-things/tests/RenderPipelineSafetyTest.h` has checks for frame clearing, brightness bounds and colour accumulation, but nothing includes it: it doesn't run on the device or in CI. Wiring it into a host build is open.
 
 ## Benefits of This Architecture
 

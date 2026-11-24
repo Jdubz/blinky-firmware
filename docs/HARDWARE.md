@@ -1,14 +1,14 @@
 # Hardware Documentation
 
-Hardware reference for Blinky Time controllers. The canonical, authoritative list of supported devices is in `devices/registry/*.json` — this doc summarises the recurring patterns.
+Hardware reference for Blinky Time controllers. The canonical list of supported devices is the device registry, [`devices/registry/*.json`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry) in blinky_time; this doc summarises the recurring patterns.
 
 ## Boards: XIAO nRF52840 Sense and Sense Plus
 
 The legacy fleet is the plain **XIAO nRF52840 Sense**; new devices (and the test box chip) are the **Sense Plus**. One bootloader and one firmware image run on both: every pin they use (QSPI flash, PDM mic, IMU, LEDs, reset/DFU, D0–D10) is identical in Seeed's netlists. The Plus adds 9 castellated edge pads (D11–D19). A fresh Plus enumerates as `2886:8065` with its factory app and `2886:0065` in its factory bootloader. Once our bootloader and app are on it, it reports `0x8045`/`0x0045` like a Sense, and the tools accept both. Details: `docs/BOOTLOADER_WORKFLOW.md` §5a.
 
-## Device Configurations (nRF52840 XIAO Sense)
+## Device Configurations (XIAO nRF52840 Sense / Sense Plus)
 
-Current registered devices (see `devices/registry/`):
+Current registered devices (see blinky_time's [`devices/registry/`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry)):
 
 | Device | Layout | Notes |
 |--------|--------|-------|
@@ -23,6 +23,7 @@ Current registered devices (see `devices/registry/`):
 | `cart_inner` | 104×1 string | Lemon-cart, two channels (`ledPin=10`, `ledPin2=9`) |
 | `cart_outer` | 96×1 string | Lemon-cart |
 | `cart_umbrella_v1` | 8×13 matrix | Lemon-cart umbrella |
+| `testbox_grid_v1` | 8×8 matrix, orientation 5 (`HORIZONTAL_ROTATED_180`) | Test box chip (Sense Plus 87DE9B58C90AFE2D); a test device, see [Test box LED grid](#test-box-led-grid) |
 | `display_v1` | 32×32 matrix | Bench display; ESP32-S3 hardware with no firmware path today |
 
 Default LED data pin is **D10**. `big_bucket_v1`, `scarf` and `shannon_hat` use D0. `cart_inner` adds a second channel on D9 for its split topology.
@@ -49,11 +50,11 @@ The XIAO's 3.3 V regulator supplies about 250 mA, enough only for a short, dim s
 
 ### Test box LED grid
 
-The test box chip (device config `testbox_grid_v1`, a listed test device) drives an 8x8 WS2812 grid. As wired and checked on the rig (2026-11-23):
+The test box chip (a XIAO nRF52840 Sense Plus, 87DE9B58C90AFE2D; device config `testbox_grid_v1`, listed in `devices/test_devices.json`) drives an 8x8 WS2812 grid. As wired and checked on the rig (2026-11-23):
 - The chip sits in a XIAO Debug Mate with its own USB-C on the hub. Data comes from D10 through the Debug Mate's D10 header pin. In Seeed's Debug Mate V1.0 KiCad netlist every D0–D10 header pin is a direct trace to the socket (nothing else on the net) except D6/D7, which go through the UART analog switch. The header's GND pin is the XIAO's GND net (`XIAO_5V-`, the low side of the Debug Mate's power-meter shunt).
 - The grid runs from its own external 5 V supply, not from the XIAO or the Debug Mate.
 - 3.3 V data drives this grid directly; no level shifter is needed.
-- Wiring order, seen from the front: data enters at the bottom-right LED; each row runs right to left, rows go bottom to top, no serpentine. That is `HORIZONTAL` (orientation 0) rotated 180°.
+- Wiring order, seen from the front: data enters at the bottom-right LED; each row runs right to left, rows go bottom to top, no serpentine. That is orientation 5, `HORIZONTAL_ROTATED_180` (#46): `HORIZONTAL` (orientation 0) rotated 180°.
 
 ### Power Requirements
 - **LED Current**: ~60mA per LED at full brightness
@@ -68,7 +69,7 @@ The test box chip (device config `testbox_grid_v1`, a listed test device) drives
 - **WS2813** - Backup data line for improved reliability
 
 ### Color Order Configuration
-Set by `ledType` in the device config (a number; see `devices/registry/README.md`):
+Set by `ledType` in the device config (a number; see blinky_time's [`devices/registry/README.md`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry/README.md)):
 - `82` = `NEO_GRB + NEO_KHZ800`: standard WS2812B, the fleet default
 - `6` = `NEO_RGB`: `big_bucket_v1`, whose LEDs are wired native RGB
 

@@ -23,10 +23,10 @@ Locations are in `blinky-things/audio/` (`AudioTracker.{h,cpp}`, `AudioControl.h
 
 | Term | Definition | Firmware Location |
 |------|-----------|-------------------|
-| **ODF** | Onset Detection Function: the per-frame signal the onset detector peak-picks. On devices it is **SuperFlux** (Böck & Widmer 2013; the onset NN is compiled out, `BLINKY_ONSET_NN_ENABLED=0`). NN builds peak-pick the NN activation (0-1) instead. | `OnsetDetector::process()` → `OnsetEvidence.odf`; flux: `spectral_.getSuperFlux()` |
+| **ODF** | Onset Detection Function: the signal the onset detector peak-picks. On devices it is **SuperFlux** (Böck & Widmer 2013) on its own overlapped onset STFT, 125 values per second (#20); the onset NN is compiled out (`BLINKY_ONSET_NN_ENABLED=0`). NN builds peak-pick the NN activation (0-1) instead. | `OnsetDetector::process()` → `OnsetEvidence.odf`; flux: `spectral_.getSuperFlux()` |
 | **Online peak picker** | Böck, Krebs & Schedl (ISMIR 2012), shared by every detector: a frame is an onset if it is the max of the last W1 frames, reaches their mean + δ, and more than W5 frames passed since the last onset. No look-ahead, no other gates. | `AudioTracker::pickOnset`; `onsetmaxframes`, `fluxavgframes`, `onsetmingap` |
-| **δ (delta)** | The picker's threshold above the moving mean: `fluxdelta` (7) for flux, `pulseonsetfloor` (0.55, fixed threshold, no mean) for the NN. | `OnsetDetector::delta()` |
-| **Onset** (output) | A discrete event: strength (0-1) of the onset fired during this update, 0 when none fired. One non-zero value per detected percussive event. | `AudioControl::onset` |
+| **δ (delta)** | The picker's threshold above the moving mean: `fluxdelta` (8) for flux, `pulseonsetfloor` (0.55, fixed threshold, no mean) for the NN. | `OnsetDetector::delta()` |
+| **Onset** (output) | A discrete event: strength (0-1) of the onset fired during this update, 0 when none fired. One non-zero value per detected hit (the target is kicks and snares). | `AudioControl::onset` |
 | **Pulse** (output) | A continuous envelope (0-1) for sparks and flashes. Each picked onset raises it to that onset's strength; it then decays with a 150 ms time constant (`pulsedecay`). Not a musical pulse. | `AudioControl::pulse`, `pulseDecayMs` |
 | **Visual trigger** | Informal name for an onset event reaching the generators (`onset > 0`, or a rise in `pulse`). How big it looks is decided in each generator. | `AudioControl::onset`, `AudioControl::pulse` |
 | **Energy** | Continuous audio level (0-1) blending mic level, bass mel energy, and flux peak-hold. Drives background animation intensity. | `AudioControl::energy` |
@@ -34,6 +34,7 @@ Locations are in `blinky-things/audio/` (`AudioTracker.{h,cpp}`, `AudioControl.h
 | **rhythmStrength** | Confidence that the audio has a periodic structure (0-1): ACF periodicity strength, faded to 0 a few seconds after the last onset. | `AudioControl::rhythmStrength` |
 | **Phase** (rhythm) | Rhythm-cycle phase 0→1, 0 = accent. Advances at the detected period in absolute time and is pulled toward the measured accent. | `AudioControl::phase`, `AudioTracker::plpPhase_` |
 | **beatCount** | Increments once per rhythm cycle (phase wrap), never decrements. Use it for "a beat happened", not phase thresholds. | `AudioControl::beatCount` |
+| **Rhythm-pattern bias** | Raises δ by up to `onsetpatternbias` (0.3 = 30%) where the learned rhythm pattern predicts no hit, while PLP confidence is above 0.3. Wanted: it is how musical repetition shows. Tune it where the pattern tracker is wrong or too strict; don't remove it. | `AudioTracker::pickOnset`, `onsetpatternbias` |
 | **plpPulse** | Repeating pattern shape at the detected period, from epoch folding (cosine fallback when no rhythm is detected). What generators consume as the "breathing curve". | `AudioControl::plpPulse`, `plpPulseValue_` |
 | ~~**Baseline tracking**~~ | ~~Floor-tracking of the flux ODF × `pulseThresholdMult`.~~ **Deleted in #292**: it settled at the noise floor and fired on steady noise. The picker's moving mean + δ replaced it. | — |
 
@@ -41,7 +42,7 @@ Locations are in `blinky-things/audio/` (`AudioTracker.{h,cpp}`, `AudioControl.h
 
 | Term | Definition | Notes |
 |------|-----------|-------|
-| **FrameOnsetNN** | The Conv1D W16 TFLite model that detects acoustic onsets from mel spectrograms. **Off on devices** until a model beats spectral flux on edm/. | Embedded: v33, 19.6 KB INT8, ~12 ms per inference on the nRF52840 (`audio/frame_onset_model_data.h`) |
+| **FrameOnsetNN** | The Conv1D W16 TFLite model that detects acoustic onsets from mel spectrograms. **Shelved on the nRF52840:** it at best ties SuperFlux on the drum metrics, and a tie goes to flux. NN feasibility is an ESP32-S3 question (`docs/NEXTGEN_ESP32S3_PLAN.md`). | Embedded: v33, 19.6 KB INT8, ~12 ms per inference on the nRF52840 (`audio/frame_onset_model_data.h`) |
 | **Onset activation** | The model's single output (0-1) per frame. Does NOT distinguish onset type (kick vs hi-hat). | `FrameOnsetNN::getLastOnset()` |
 | **Major event** | A kick drum or strong snare. Usually drives the biggest visual response. | Low-frequency transients (<200 Hz for kicks) |
 | **Minor event** | A hi-hat, cymbal tick, ghost note. **Not a target:** a detection on a hat is a false positive (CLAUDE.md, 2026-10-22). | High-frequency transients (>4 kHz for hi-hats) |
@@ -50,8 +51,9 @@ Locations are in `blinky-things/audio/` (`AudioTracker.{h,cpp}`, `AudioControl.h
 
 | Term | Definition | Notes |
 |------|-----------|-------|
-| **Drum metrics** | **The primary quality metrics.** Kick and snare recall at ±30/±50 ms, the share of detections that land on a kick or snare (on-drum), and drum F, against cleaned `kick_weighted` labels, with edm/ played at the mic's real level (−50 dB). | SuperFlux ≤ 5 kHz: drum F 0.657, kick R 79%, on-drum 56% (`docs/AUDIO_ARCHITECTURE.md`) |
-| **Onset F1** | F-measure of all detected onsets vs `.onsets_consensus.json` on edm/. **Secondary** since the drum-hit framing: it scored 0.68 while the hat looked almost random (#280). blinky-server still reports it. | Old picker: 0.546 on edm/ |
+| **Drum metrics** | **The primary hit-quality metrics.** Kick and snare recall at ±30/±50 ms, the share of detections that land on a kick or snare (on-drum), and drum F, against cleaned `kick_weighted` labels, with edm/ played at the mic's real level (−50 dB). | Devices (onset STFT, δ 8): drum F 0.640, kick R 80%, on-drum 61% (`docs/AUDIO_ARCHITECTURE.md`) |
+| **repS** | Repetition consistency, strength-weighted: does repeated audio get repeated light? Label-free: detections in regions whose audio repeats one lag later are matched one-to-one, and `repS = 1 − Σ\|s_a − s_b\| / Σ max(s_a, s_b)` (unmatched = 0). 1 = the same hits at the same strengths. **The primary metric for #8** (consistent reactivity), always read with the drum metrics: a change must raise it without lowering kick recall or on-drum share. `rep` is the unweighted version. | `tests/tracker/consistency.py`; devices at δ 8: 0.715 |
+| **Onset F1** | F-measure of all detected onsets vs `.onsets_consensus.json` on edm/. **Secondary** since the drum-hit framing (#8): it scored 0.68 while the hat looked almost random (#280). blinky-server still reports it. | Old picker: 0.546 on edm/ |
 | ~~**Beat F1**~~ | ~~F-measure of onset peaks vs metrical beat positions.~~ **DROPPED** — depends on music structure, not detector quality. | Do not use |
 | **Phase alignment %** | Fraction of visual triggers landing within tolerance of a beat grid subdivision. Measures how well the rhythm tracking follows the music. | On-device sweep metric |
 | **Onset density** | Onsets per second, smoothed. Dance music is typically 2-6/s. | `AudioControl::onsetDensity` |

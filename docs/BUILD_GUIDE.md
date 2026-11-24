@@ -5,6 +5,7 @@
 | Board | FQBN | Core | Status |
 |-------|------|------|--------|
 | XIAO nRF52840 Sense | `Seeeduino:nrf52:xiaonRF52840Sense` | Seeeduino nRF52 (non-mbed), pinned | The deployed fleet |
+| XIAO nRF52840 Sense Plus | same build as the Sense (`xiaonRF52840Sense`) | same | New devices and the test box chip. Every build must run on both boards ([BOOTLOADER_WORKFLOW.md](BOOTLOADER_WORKFLOW.md) §5a) |
 | XIAO ESP32-S3 Sense | `esp32:esp32:XIAO_ESP32S3` | arduino-esp32 (not pinned) | Next generation only, see [NEXTGEN_ESP32S3_PLAN.md](NEXTGEN_ESP32S3_PLAN.md) |
 
 > ESP32-S3 support for the current fleet was cut in March 2026. All active development targets the nRF52840.
@@ -95,7 +96,7 @@ Device configs are JSON, uploaded to the device at runtime with `device upload <
 - **A bench device on your USB:** `device upload <json>` over its serial port is fine.
 - After an upload, wait at least 75 s of uptime before any reset (the 60-second rule in CLAUDE.md).
 
-Config files live in `devices/registry/`, one per device ID (`<deviceId>.json`). See [devices/registry/README.md](../devices/registry/README.md) and [HARDWARE.md](HARDWARE.md).
+Config files live in blinky_time's `devices/registry/`, one per device ID (`<deviceId>.json`). See its [README](https://github.com/Jdubz/blinky_time/blob/master/devices/registry/README.md) and [HARDWARE.md](HARDWARE.md).
 
 ---
 
