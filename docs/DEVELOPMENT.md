@@ -29,7 +29,7 @@ Channels and the release flow: [RELEASE_PROCESS.md](RELEASE_PROCESS.md). Don't d
 
 ### Recovery (nRF52840 bricked by DFU upload)
 
-Test chips on the test box recover over SWD through their XIAO Debug Mate: `scripts/swd_recover.sh` (see [SWD_RECOVERY.md](SWD_RECOVERY.md)). A Raspberry Pi Zero W at `swd-flash.local` is provisioned for SWD recovery (see CLAUDE.md for invocation). It has the known-good fleet bootloader, MBR, and SoftDevice S140 7.3.0 hex files staged. Use this as the recovery of last resort when a device drops off USB and isn't reachable via BLE.
+Test chips on the test box recover over SWD through their XIAO Debug Mate: `scripts/swd_recover.sh probe`, then `restore` (see [SWD_RECOVERY.md](SWD_RECOVERY.md)). That is the only SWD path (the swd-flash.local Pi was retired 2026-11-23). A fleet device off the box can be recovered over SWD only with physical access to a Debug Mate. Use it as the last resort when a device drops off USB and isn't reachable via BLE.
 
 ### Unresponsive Device Runbook
 
@@ -39,7 +39,7 @@ Installed nRF52840 devices are physically enclosed — reset buttons are **not**
    ```bash
    uhubctl -a cycle -p <port>
    ```
-   Does NOT work on `cart_inner` / `cart_outer` — those are externally powered, so toggling the host USB hub only affects data lines. For those, use the firmware `bootloader` serial command, SWD via `swd-flash.local`, or the physical reset button.
+   Does NOT work on `cart_inner` / `cart_outer` — those are externally powered, so toggling the host USB hub only affects data lines. For those, use the firmware `bootloader` serial command, the physical reset button, or SWD on a Debug Mate (physical access).
 
 2. **Re-flash via blinky_time's deploy.sh** (forces a known-good firmware state):
    ```bash
@@ -49,7 +49,7 @@ Installed nRF52840 devices are physically enclosed — reset buttons are **not**
 
 3. **If the serial port disappeared entirely:** wait 10 seconds and check `ls /dev/ttyACM*`. USB re-enumeration after DFU or crash recovery is not instantaneous.
 
-4. **Last resort:** SWD via `swd-flash.local`, or physical access if available. Most production fleet is sealed — exhaust the SWD path first.
+4. **Last resort:** SWD through a XIAO Debug Mate (`scripts/swd_recover.sh`), which needs physical access. Most of the production fleet is sealed, so exhaust the USB and BLE paths first.
 
 > **Test chips (unenclosed bare chips on bench):** always test risky or untested firmware on these first. Reset button and SWD recovery pads are directly accessible.
 
@@ -241,7 +241,7 @@ save                # Persist to flash
 
 **Cause**: DFU serial protocol corrupted bootloader
 
-**Fix**: SWD recovery via `swd-flash.local` (see Recovery above). From then on, flash with `deploy.sh` / `deploy_local.py`.
+**Fix**: SWD recovery through a XIAO Debug Mate with `scripts/swd_recover.sh` (see Recovery above). From then on, flash with `deploy.sh` / `deploy_local.py`.
 
 ---
 
