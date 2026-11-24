@@ -10,6 +10,50 @@ on:
     branches: [ master, staging ]
 
 jobs:
+  # Which slow checks this change needs. The tracker harnesses (~5-6 min each) replay the
+  # corpus through the audio pipeline, so they run only when something they build or read
+  # changed. They stay required checks: a job skipped by its own `if` reports success, while
+  # a workflow-level path filter would leave a required check waiting forever.
+  changes:
+    name: Changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      audio: ${{ steps.diff.outputs.audio }}
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+    - name: Diff against the base
+      id: diff
+      env:
+        EVENT: ${{ github.event_name }}
+        BASE_REF: ${{ github.base_ref }}
+        BEFORE: ${{ github.event.before }}
+      run: |
+        if [ "$EVENT" = pull_request ]; then
+          range="origin/$BASE_REF...HEAD"
+        elif [ -n "$BEFORE" ] && ! [[ "$BEFORE" =~ ^0+$ ]] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+          range="$BEFORE..HEAD"
+        else
+          echo "no base to diff against: run everything"
+          echo "audio=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        git diff --name-only "$range" > changed.txt
+        echo "changed ($range):"; cat changed.txt
+        # What the tracker harnesses compile (g++ -MM of tracker_harness.cpp, AudioTracker,
+        # SharedSpectralAnalysis, AdaptiveMic, BlinkyAssert), their scripts, the TFLite pin
+        # the NN harness builds against, the corpus they replay, and this workflow.
+        audio='^(blinky-things/audio/|blinky-things/hal/|blinky-things/inputs/AdaptiveMic\.|blinky-things/types/BlinkyAssert\.|blinky-simulator/include/|tests/tracker/|tools/setup_tflite_lib\.sh$|tools/firmware_toolchain\.json$|corpus$|\.github/workflows/pr-validation\.yml$)'
+        if grep -qE "$audio" changed.txt; then
+          echo "audio=true" >> "$GITHUB_OUTPUT"
+          echo "audio pipeline or harness changed: the tracker harnesses run"
+        else
+          echo "audio=false" >> "$GITHUB_OUTPUT"
+          echo "nothing the tracker harnesses build or read changed: they skip"
+        fi
+
   compile:
     name: Compile Firmware
     runs-on: ubuntu-latest
@@ -288,6 +332,10 @@ jobs:
     name: Tracker Harness (UBSan stress + corpus gate)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Skipped unless the audio pipeline or the harness changed (job `changes`); runs if that
+    # job itself failed, so a broken diff can never skip it silently.
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.audio == 'true') }}
 
     steps:
     - name: Checkout repository
@@ -398,6 +446,10 @@ jobs:
     name: Tracker Harness with real onset NN (host TFLite Micro)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Skipped unless the audio pipeline or the harness changed (job `changes`); runs if that
+    # job itself failed, so a broken diff can never skip it silently.
+    needs: changes
+    if: ${{ always() && (needs.changes.result != 'success' || needs.changes.outputs.audio == 'true') }}
 
     steps:
     - name: Checkout repository
