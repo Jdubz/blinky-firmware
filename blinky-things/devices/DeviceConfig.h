@@ -8,7 +8,7 @@ enum MatrixOrientation {
   PANEL_GRID = 2,         // 2×2 grid of equal panels, chained TL→TR→BL→BR, serpentine rows
   HORIZONTAL_ZIGZAG = 3,  // Row-major serpentine — data starts top-left, row 0 L→R,
                           // row 1 R→L, row 2 L→R, ... (big-bucket-style wiring)
-  VERTICAL_FIRST_DOWN = 4 // Vertical column-major, NO zigzag. Column 0 wired
+  VERTICAL_FIRST_DOWN = 4,// Vertical column-major, NO zigzag. Column 0 wired
                           // data-in-at-top (top → bottom). Columns 1..N each
                           // wired data-in-at-bottom (bottom → top), ALL in
                           // the same direction — no alternation between
@@ -19,6 +19,9 @@ enum MatrixOrientation {
                           // rim and EACH subsequent spoke is wired bottom
                           // (tip) → top (canopy), with the jumper returning
                           // along the canopy to the next spoke's tip.
+  HORIZONTAL_ROTATED_180 = 5 // HORIZONTAL turned 180 degrees: data enters bottom-right,
+                             // each row runs R->L, rows go bottom->top, no serpentine
+                             // (the test box's 8x8 grid, mounted fixed).
 };
 
 enum LayoutType {

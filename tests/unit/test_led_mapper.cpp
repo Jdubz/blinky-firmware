@@ -1,12 +1,13 @@
 /**
  * LEDMapper Unit Tests — native C++ (no Arduino required)
  *
- * Covers PANEL_GRID orientation: coordinate transpose, TL/BR panel index
+ * Covers HORIZONTAL_ROTATED_180, unknown-orientation rejection, and PANEL_GRID: coordinate transpose, TL/BR panel index
  * swap, and serpentine-within-panel ordering.
  *
  * Compile and run:
- *   g++ -std=c++11 -I../../blinky-things test_led_mapper.cpp -o test_led_mapper
- *   ./test_led_mapper
+ *   g++ -std=c++17 -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840 \
+ *       -I blinky-simulator/include -I blinky-things tests/unit/test_led_mapper.cpp -o test_led_mapper
+ *   ./test_led_mapper        (from the repo root; CI: pr-validation.yml "LED Mapper")
  */
 
 // ---------------------------------------------------------------------------
@@ -91,6 +92,53 @@ static void testHorizontal() {
     EXPECT_EQ(m.getIndex(-1, 0), -1);
     EXPECT_EQ(m.getIndex(4, 0),  -1);
     EXPECT_EQ(m.getIndex(0, 3),  -1);
+}
+
+// ---------------------------------------------------------------------------
+// HORIZONTAL_ROTATED_180 (the test box grid: data enters bottom-right)
+// ---------------------------------------------------------------------------
+static void testHorizontalRotated180() {
+    printf("[HORIZONTAL_ROTATED_180]\n");
+
+    // 4 columns, 3 rows:
+    //   y=0 (top):    11 10  9  8
+    //   y=1:           7  6  5  4
+    //   y=2 (bottom):  3  2  1  0
+    LEDMapper m;
+    DeviceConfig cfg = makeConfig(4, 3, HORIZONTAL_ROTATED_180);
+    EXPECT(m.begin(cfg));
+
+    EXPECT_EQ(m.getIndex(3, 2), 0);   // bottom-right is the first LED
+    EXPECT_EQ(m.getIndex(2, 2), 1);   // the row runs right to left
+    EXPECT_EQ(m.getIndex(0, 2), 3);
+    EXPECT_EQ(m.getIndex(3, 1), 4);   // next row starts at the right again (no serpentine)
+    EXPECT_EQ(m.getIndex(0, 0), 11);  // top-left is the last LED
+
+    EXPECT_EQ(m.getX(0), 3);  EXPECT_EQ(m.getY(0), 2);
+    EXPECT_EQ(m.getX(4), 3);  EXPECT_EQ(m.getY(4), 1);
+    EXPECT_EQ(m.getX(11), 0); EXPECT_EQ(m.getY(11), 0);
+
+    // Every LED index is used exactly once
+    bool seen[12] = {false};
+    for (int y = 0; y < 3; y++)
+        for (int x = 0; x < 4; x++) {
+            int i = m.getIndex(x, y);
+            EXPECT(i >= 0 && i < 12 && !seen[i]);
+            if (i >= 0 && i < 12) seen[i] = true;
+        }
+}
+
+// ---------------------------------------------------------------------------
+// An orientation with no mapping is refused, not silently mapped row-major
+// ---------------------------------------------------------------------------
+static void testUnknownOrientationRejected() {
+    printf("[unknown orientation]\n");
+
+    LEDMapper m;
+    // 7 is inside the enum's value range (UBSan accepts it) but has no mapping.
+    DeviceConfig cfg = makeConfig(4, 3, (MatrixOrientation)7);
+    EXPECT(!m.begin(cfg));
+    EXPECT(!m.isValid());
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +306,8 @@ int main() {
     printf("=== LEDMapper Unit Tests ===\n\n");
 
     testHorizontal();
+    testHorizontalRotated180();
+    testUnknownOrientationRejected();
     testVertical();
     testPanelGrid4x4();
     testPanelGridOddDimReject();
