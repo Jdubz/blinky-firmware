@@ -446,8 +446,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleBatteryCommand(cmd)) return true;
     if (handleRecordCommand(cmd)) return true;   // Phone record mode (BLE)
     if (handleStreamCommand(cmd)) return true;
-    // cppcheck-suppress knownConditionTrueFalse -- stub for future test commands
-    if (handleTestCommand(cmd)) return true;
+    if (handleTestCommand(cmd)) return true;   // testpattern (camera calibration)
     if (handleAudioStatusCommand(cmd)) return true;
     if (handleModeCommand(cmd)) return true;
     if (handleConfigCommand(cmd)) return true;
@@ -834,11 +833,128 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
 }
 
 // === TEST MODE COMMANDS ===
+// Parse a whole decimal token into [lo, hi]; false (nothing written) otherwise.
+static bool parseIntToken(const char* tok, long lo, long hi, long& out) {
+    if (!tok || !*tok) return false;
+    char* end;
+    long v = strtol(tok, &end, 10);
+    if (*end != '\0' || v < lo || v > hi) return false;
+    out = v;
+    return true;
+}
+
+// "testpattern ...": camera calibration patterns for the test box (render/TestPattern.h).
+// Runtime only, never saved; "testpattern off" or a reboot returns to the generator.
 bool SerialConsole::handleTestCommand(const char* cmd) {
-    // Hardware gain lock/unlock removed (v72) — gain is fixed at platform optimal level.
-    // Stub retained for future test commands.
-    (void)cmd;
-    return false;
+    if (strncmp(cmd, "testpattern", 11) != 0) return false;
+    if (cmd[11] != ' ' && cmd[11] != '\0') return false;
+    static const char USAGE[] =
+        "Usage: testpattern off | solid R G B | pixel X Y R G B"
+        " | flash R G B ON_MS PERIOD_MS COUNT | status";
+    if (!pipeline_ || !pipeline_->getPixelMatrix()) {
+        out_.println(F("ERROR: testpattern unavailable (no render pipeline)"));
+        return true;
+    }
+    TestPattern& tp = pipeline_->testPattern();
+    const PixelMatrix& m = *pipeline_->getPixelMatrix();
+
+    char buf[80];
+    const char* args = cmd[11] ? cmd + 12 : "";
+    if (strlen(args) >= sizeof(buf)) {  // never parse a truncated command
+        out_.println(F("ERROR: testpattern arguments too long"));
+        return true;
+    }
+    strncpy(buf, args, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char* tok[8] = {nullptr};
+    int n = 0;
+    char* p = buf;
+    while (*p && n < 8) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        tok[n++] = p;
+        while (*p && *p != ' ') p++;
+        if (*p) { *p = '\0'; p++; }
+    }
+    while (*p == ' ') p++;
+    if (*p) n = 9;  // more than 8 tokens: refused as a usage error below
+    if (n == 0) {
+        out_.println(USAGE);
+        return true;
+    }
+
+    long v[7];
+    if (strcmp(tok[0], "off") == 0 && n == 1) {
+        tp.off();
+        out_.println(F("OK testpattern off"));
+        return true;
+    }
+    if (strcmp(tok[0], "status") == 0 && n == 1) {
+        out_.print(F("{\"mode\":\""));
+        out_.print(TestPattern::modeName(tp.mode()));
+        out_.print(F("\",\"done\":"));
+        out_.print(tp.done() ? F("true") : F("false"));
+        out_.print(F(",\"millis\":"));
+        out_.print(millis());
+        // The LEDs latch the frame after its DMA: 24 bits at 800 kHz per pixel.
+        out_.print(F(",\"pixels\":"));
+        out_.print(m.getTotalPixels());
+        out_.print(F(",\"usPerPixel\":30,\"edges\":["));
+        for (int i = 0; i < tp.recorded(); i++) {
+            if (i) out_.print(',');
+            out_.print('[');
+            out_.print(tp.edge(i).onMs);
+            out_.print(',');
+            out_.print(tp.edge(i).offMs);
+            out_.print(']');
+        }
+        out_.println(F("]}"));
+        return true;
+    }
+    if (strcmp(tok[0], "solid") == 0 && n == 4) {
+        if (parseIntToken(tok[1], 0, 255, v[0]) && parseIntToken(tok[2], 0, 255, v[1]) &&
+            parseIntToken(tok[3], 0, 255, v[2])) {
+            tp.solid((uint8_t)v[0], (uint8_t)v[1], (uint8_t)v[2]);
+            out_.println(F("OK testpattern solid"));
+        } else {
+            out_.println(F("ERROR: solid R G B, each 0-255"));
+        }
+        return true;
+    }
+    if (strcmp(tok[0], "pixel") == 0 && n == 6) {
+        if (parseIntToken(tok[1], 0, m.getWidth() - 1, v[0]) &&
+            parseIntToken(tok[2], 0, m.getHeight() - 1, v[1]) &&
+            parseIntToken(tok[3], 0, 255, v[2]) && parseIntToken(tok[4], 0, 255, v[3]) &&
+            parseIntToken(tok[5], 0, 255, v[4])) {
+            tp.pixel((int)v[0], (int)v[1], (uint8_t)v[2], (uint8_t)v[3], (uint8_t)v[4]);
+            out_.println(F("OK testpattern pixel"));
+        } else {
+            out_.print(F("ERROR: pixel X Y R G B: X 0-"));
+            out_.print(m.getWidth() - 1);
+            out_.print(F(", Y 0-"));
+            out_.print(m.getHeight() - 1);
+            out_.println(F(", colours 0-255"));
+        }
+        return true;
+    }
+    if (strcmp(tok[0], "flash") == 0 && n == 7) {
+        bool ok = parseIntToken(tok[1], 0, 255, v[0]) && parseIntToken(tok[2], 0, 255, v[1]) &&
+                  parseIntToken(tok[3], 0, 255, v[2]) && parseIntToken(tok[4], 1, 10000, v[3]) &&
+                  parseIntToken(tok[5], 2, 20000, v[4]) &&
+                  parseIntToken(tok[6], 1, TestPattern::MAX_FLASHES, v[5]);
+        uint32_t now = millis();
+        if (ok && tp.flash((uint8_t)v[0], (uint8_t)v[1], (uint8_t)v[2], (uint16_t)v[3],
+                           (uint16_t)v[4], (int)v[5], now)) {
+            out_.print(F("OK testpattern flash start="));
+            out_.println(now);
+        } else {
+            out_.print(F("ERROR: flash R G B ON_MS PERIOD_MS COUNT: colours 0-255, ON_MS < PERIOD_MS, COUNT 1-"));
+            out_.println(TestPattern::MAX_FLASHES);
+        }
+        return true;
+    }
+    out_.println(USAGE);
+    return true;
 }
 
 // === AUDIO CONTROLLER STATUS ===

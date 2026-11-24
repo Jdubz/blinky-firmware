@@ -72,6 +72,20 @@ Generator class names have no `Generator` suffix (`Fire`, not `FireGenerator`). 
 
 `scene <generator> <off|rotate|static> <speed 0-2> <hue 0-1>` sets generator and effect in one command (used for fleet broadcasts). A device with `buttonPin` set cycles generators on a button press.
 
+### Test patterns (camera calibration)
+
+`testpattern` replaces the generator and effect output with a fixed pattern, for the test box camera (blinky_time `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md`, "Calibration"). The renderer and LED mapper still run, so a logical (x, y) lights the LED the generators would light there. Runtime only: never saved, and `testpattern off` or a reboot returns to the generator. Code: `render/TestPattern.h`.
+
+| Command | Pattern | For |
+|---|---|---|
+| `testpattern solid R G B` | every pixel one colour | levels, LED PWM |
+| `testpattern pixel X Y R G B` | one pixel lit (logical coordinates), the rest dark | region map, orientation, dead or stuck LEDs |
+| `testpattern flash R G B ON_MS PERIOD_MS COUNT` | all pixels on for `ON_MS`, `COUNT` times (at most 256), one every `PERIOD_MS` plus up to half of it (irregular, so it can't phase-lock to the camera) | the camera's timing reference |
+| `testpattern status` | JSON: mode, `done`, `millis`, `pixels`, `usPerPixel`, and `edges`: `[on, off]` per flash, the `millis()` when that frame was handed to the LEDs | reading a flash train back |
+| `testpattern off` | back to the generator | |
+
+A flash edge is stamped right after `show()` queues the frame. The LEDs latch it after the DMA, about `pixels × usPerPixel` µs later (2 ms for 64 LEDs). The host puts edges on its own clock with the serial clock sync (`millis` offset).
+
 ## Base Interfaces
 
 ### Generator Interface (`generators/Generator.h`)

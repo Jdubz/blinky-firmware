@@ -89,9 +89,13 @@ void RenderPipeline::render(const AudioControl& audio) {
 
     // initialized_ guarantees all pointers are valid (set in begin())
     pixelMatrix_->clear();
-    currentGenerator_->generate(*pixelMatrix_, audio);
-    if (effectType_ != EffectType::NONE) {
-        currentEffect_->apply(pixelMatrix_);
+    if (testPattern_.active()) {
+        testPattern_.fill(*pixelMatrix_);
+    } else {
+        currentGenerator_->generate(*pixelMatrix_, audio);
+        if (effectType_ != EffectType::NONE) {
+            currentEffect_->apply(pixelMatrix_);
+        }
     }
     // Compute visual metrics on the post-effect matrix — what the
     // generator + effect chain is producing. Done before renderer_ so

@@ -13,6 +13,7 @@
 #include "../devices/DeviceConfig.h"
 #include "EffectRenderer.h"
 #include "FrameMetrics.h"
+#include "TestPattern.h"
 
 /**
  * EffectType - Enumeration of available post-processing effects
@@ -94,6 +95,10 @@ public:
     // generator + effect run. Streamed by SerialConsole as the "v" block.
     const FrameMetrics& getFrameMetrics() const { return metrics_; }
 
+    // Camera calibration patterns (TestPattern.h): while active, they replace the generator
+    // and effect; the renderer and LED mapper still run. Runtime only, never saved.
+    TestPattern& testPattern() { return testPattern_; }
+
     // List available options (returns count)
     static constexpr int NUM_GENERATORS = 4;
     static constexpr int NUM_EFFECTS = 2;  // Including NONE
@@ -103,6 +108,7 @@ public:
     static EffectType getEffectTypeByIndex(int index);
 
 private:
+    TestPattern testPattern_;
     // Generators (all owned, one active)
     Fire* fire_;
     Water* water_;
