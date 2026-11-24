@@ -1,6 +1,8 @@
 # Onset Detection Literature — Reference for the Blinky System
 
-> **Purpose.** Ground design decisions for the Blinky on-device onset detector in published research rather than internal extrapolation. Compiled 2026-05-02 after v36-fmax closed as a negative result and we needed an honest reckoning with where the literature actually places us.
+> **Purpose.** Ground design decisions for the on-device drum-hit detector in published research rather than internal extrapolation. Compiled 2026-05-02 for the onset NN; the section on the deployed design was added 2026-11.
+>
+> **Scope.** Devices run SuperFlux and the Böck online picker (section 0). The onset NN is shelved on the nRF52840 (a tie goes to flux), so sections 1–7 matter for the shelved NN and for the ESP32-S3 NN feasibility investigation (`docs/NEXTGEN_ESP32S3_PLAN.md`). The task is kick and snare detection, so all-onset F1 numbers below are context, not our target metric.
 >
 > **Audience.** Future-me / future-engineers picking up this work. Quote a specific paper before claiming "the literature says X."
 >
@@ -16,6 +18,35 @@
 | What labels do they use? | Hand-curated (Böck, ENST, MDB-Drums), rhythm-game crowdsourced (ADTOF), or MIDI-aligned (Callender 2020). Consensus-of-detectors as training labels is rare and known-noisier |
 | Is "multi-instrument heads + masked loss" published? | The two ingredients separately yes (Vogl 2017, Fonseca 2020). The exact combination for onset detection is novel — no precedent |
 | Is our eval set GT trustworthy? | Inter-annotator F1 caps at 0.92–0.95 on clean drums, **lower on dense EDM**. Our consensus-derived GT plausibly caps practical F1 at 0.75–0.80 |
+
+## Section 0 — What the deployed design rests on
+
+These are the sources the firmware's onset path cites in its code comments (`audio/SharedSpectralAnalysis.h`, `audio/OnsetDetector.h`, `audio/AudioTracker.h`). How the design follows and deviates from them is in `docs/AUDIO_ARCHITECTURE.md`, "Spectral Flux" and "Pulse Detection".
+
+### Böck & Widmer (2013) "Maximum filter vibrato suppression for onset detection" — DAFx-13 (SuperFlux)
+
+- The onset detection function on devices: log-compressed magnitudes on a log-frequency triangular filterbank, differenced against an earlier frame after a maximum filter across frequency, half-wave rectified and summed.
+- Reference framing: Hann 46 ms at 200 fps; the difference is taken to the frame whose window overlaps by about half (ratio 0.5).
+- Ours: 24 bands per octave, 62.5 Hz–8 kHz (101 bands after merging), ±1 band max filter, log10(λ·S + 1) with λ = 32768, Hann 512 (32 ms) at 125 fps, sum over bands ≤ 5 kHz.
+
+### Böck, Krebs & Schedl (2012) "Evaluating the online capabilities of onset detection methods" — ISMIR
+
+- The shared online peak picker: frame t is an onset if it is the maximum of the last W1 frames, reaches their mean over W3 frames + δ, and more than W5 frames have passed since the last onset. No look-ahead.
+- Their online values are 30 / 100 / 30 ms; ours are 32 / 96 / 32 ms.
+
+### Böck, Arzt, Krebs & Schedl (2012) "Online real-time onset detection with recurrent neural networks" — DAFx-12
+
+- Cited for causal framing: Hann windows of 11.6–46 ms at 100 fps, right edges aligned at the current sample. The onset STFT is right-aligned the same way.
+
+### Smith, *Spectral Audio Signal Processing*, "Choice of Hop Size"
+
+- An STFT avoids time aliasing only when the hop is at most N/4 for a Hann (or Hamming) window. The old 256-sample frames had hop = N, so a hit's weight depended on where it landed (0.08–1.0); the onset STFT uses hop 128 on a 512 window, exactly N/4 (`static_assert` in `SharedSpectralAnalysis.h`). Measured effect: phase-sensitive kicks and snares fell from 38 % to 9.6 % (#20).
+
+### Wu et al. (2018) "A Review of Automatic Drum Transcription"
+
+- Cited for band-limited onset functions as the simplest drum-transcription front end, which is why only bands ≤ 5 kHz vote (section 2 below).
+
+Other sources cited in the audio code: Martin (2001) minimum-statistics noise estimation (off by default), Giannoulis, Massberg & Reiss (JAES 2012) soft-knee compressor, Grosche (2011) PLP, Lostanlen & Salamon (2019) PCEN (NN input).
 
 ## Section 1 — Onset detection state of the art
 
@@ -50,7 +81,7 @@
 
 ### Vogl, Dorfer, Widmer, Knees (2017) "Drum Transcription via Joint Beat and Drum Modeling using CRNNs" — ISMIR
 
-- **Closest published architecture to our proposed #135**
+- Closest published architecture to the multi-head drum NN that was considered for the shelved NN
 - Joint multi-output: kick / snare / hihat + beat + downbeat heads
 - Per-instrument F1 0.74–0.87 on ENST/MDB-Drums/SMT/RBMA13
 - **No fallback head, no missing-label masking**
@@ -86,7 +117,7 @@
 
 ### Fonseca et al. (2020) "Addressing Missing Labels in Large-Scale Sound Event Recognition with a Teacher-Student Framework with Loss Masking" — ICASSP
 
-- **The exact masked-loss mechanism we propose for #135**
+- The masked-loss mechanism considered for a multi-head drum NN
 - Applied to AudioSet sound events, not music onsets
 - Mask the loss for missing labels per-example; train multi-task heads otherwise normally
 - URL: https://arxiv.org/abs/2005.00878
@@ -123,6 +154,8 @@
 
 ## Section 6 — Things explicitly NOT in the literature for our scale
 
+*Applies to the shelved onset NN and the ESP32-S3 NN investigation.*
+
 These are levers we have used or considered. They do not have published support at ≤10K params on onset detection — flagged so we don't claim "the literature says X" when it doesn't.
 
 - "Wider Conv1D doesn't help at fixed param count" — tested only at our scale; not published
@@ -134,19 +167,21 @@ These are levers we have used or considered. They do not have published support 
 
 ## Section 7 — Recommended priors for the next experiment
 
+*Applies to the shelved onset NN and the ESP32-S3 NN investigation. The F1 here is all-onset F1; a future NN must be judged on the drum metrics and `repS`.*
+
 Given the literature, the realistic prior on what an experiment can move:
 
 | Lever | Literature-supported lift | Cost | Confidence |
 |---|---|---|---|
 | Hand-curate GT (replaces consensus-derived) | +0.05–0.10 measured F1, no model change | 4–8 hours | high |
-| Per-instrument heads + masked-loss fallback (#135) | +0.05–0.10 if coverage is binding | 1 week | medium (novel combination) |
+| Per-instrument heads + masked-loss fallback | +0.05–0.10 if coverage is binding | 1 week | medium (novel combination) |
 | KD from BS-RoFormer / madmom RNN | +0.03–0.08 | 1 week | medium |
 | Capacity bump (10K → 25K params) | +0.05–0.15 | requires firmware budget rev | unknown at 10K start |
 | HPSS preprocessing | ±0.03 | 2 days | low |
 | Loss function tweaks | ≤0.01 | trivial | high (ceiling) |
 | target_rms_db / augmentation tweaks | tested exhaustively, ≤0.01 | trivial | high (ceiling) |
 
-**Recommended experiment ordering** is in `ML_IMPROVEMENT_PLAN.md` 2026-05-02 entry. Hand-curate GT first (cheapest, most diagnostic). Per-class F1 breakdown second. #135 only after the first two confirm a label-coverage gap exists.
+**Recommended experiment ordering** is in blinky_time's [`docs/ML_IMPROVEMENT_PLAN.md`](https://github.com/Jdubz/blinky_time/blob/master/docs/ML_IMPROVEMENT_PLAN.md), 2026-05-02 entry. Hand-curate GT first (cheapest, most diagnostic). Per-class F1 breakdown second. Multi-head models only after the first two confirm a label-coverage gap exists.
 
 ## Open questions the literature does NOT answer
 

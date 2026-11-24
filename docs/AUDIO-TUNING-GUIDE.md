@@ -1,10 +1,10 @@
 # Audio Tuning Guide
 
-**Last checked against the code:** 2026-10-21 (SETTINGS_VERSION 98). Defaults below are the factory values in `blinky-things/config/ConfigStorage.cpp`; the tracker's own member defaults are in `blinky-things/audio/AudioTracker.h`. Verify there before tuning.
+**Last checked against the code:** 2026-11-23 (SETTINGS_VERSION 100). Defaults below are the factory values in `blinky-things/config/ConfigStorage.cpp`; the tracker's own member defaults are in `blinky-things/audio/AudioTracker.h`. Verify there before tuning.
 
-> The task is **onset detection**: fire on every percussive hit, on the beat or not. Score against `.onsets_consensus.json` on `blinky-test-player/music/edm/` (the only validation corpus). Don't use beat ground truth. See CLAUDE.md.
+> The task is **drum-hit detection**: kicks and snares, on the beat or not. Hi-hats, cymbals and non-percussive changes are false positives. Score kick/snare recall and the on-drum share against the drum labels, plus repetition consistency (`repS`, below), on `corpus/edm/` (the only validation corpus). All-onset F1 is a secondary number at most. Don't use beat ground truth. See CLAUDE.md.
 
-This document covers testing and tuning of the audio side of the Blinky audio-reactive LED system. For how the pipeline works, see `docs/AUDIO_ARCHITECTURE.md`.
+This document covers testing and tuning of the audio side of the Blinky audio-reactive LED system, and is the one place the tunable parameters are listed. For how the pipeline works, see `docs/AUDIO_ARCHITECTURE.md`.
 
 ---
 
@@ -14,10 +14,8 @@ This document covers testing and tuning of the audio side of the Blinky audio-re
 2. [Testing Infrastructure](#testing-infrastructure)
 3. [All Tunable Parameters](#all-tunable-parameters)
 4. [Current Best Settings](#current-best-settings)
-5. [Historical Test Results](#historical-test-results)
-6. [Comprehensive Test Plan](#comprehensive-test-plan)
-7. [Troubleshooting](#troubleshooting)
-8. [Appendix: Removed Parameters](#appendix-removed-parameters)
+5. [Comprehensive Test Plan](#comprehensive-test-plan)
+6. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -33,7 +31,8 @@ PDM Microphone (16kHz, mono)
    SharedSpectralAnalysis (FFT-256, 62.5 Hz frames)
    ├── Soft-knee compressor (Giannoulis 2012)
    ├── 50 mel bands (30-8000 Hz) + per-band whitening
-   ├── SuperFlux (pre-compressor, 78-band log filterbank, unweighted): onsets
+   ├── SuperFlux on its own onset STFT (Hann 512, hop 128 = 125 fps, #20;
+   │   pre-compressor, 101-band log filterbank, unweighted sum <= 5 kHz): onsets
    └── Band-weighted spectral flux (bass/mid/high): energy synthesis
         |
         ├── [ONSET PATH]  (devices: spectral flux; the onset NN is compiled out)
@@ -59,8 +58,8 @@ PDM Microphone (16kHz, mono)
 
 ### Key Design Decisions
 
-1. **Onsets and rhythm use different signals.** Onset detection fires on every hit. The rhythm sources are tuned for periodicity and never include the NN (#155).
-2. **Spectral-flux onsets on devices.** `BLINKY_ONSET_NN_ENABLED=0`. Tuned flux scores F1 0.546 at 178 fps on edm/; the v33 NN scores 0.480 and holds the loop at 48 fps. The NN path is kept for the host NN harness and a cheaper future model (#174).
+1. **Hits and rhythm use different signals.** Onset detection fires on every kick and snare, on-beat or not. The rhythm sources are tuned for periodicity and never include the NN (#155).
+2. **SuperFlux onsets on devices; the NN is shelved on the nRF52840.** `BLINKY_ONSET_NN_ENABLED=0`. On the drum metrics the NN at best ties SuperFlux, and a tie goes to flux, which also costs far less CPU (no dropped LED frames). The NN path stays in the host NN harness so it keeps compiling and passing CI. Changes are judged on kick/snare recall, the on-drum share and `repS` (#8).
 3. **Spectral conditioning.** The soft-knee compressor normalizes gross signal level; mel bands get per-band whitening (per-bin FFT whitening was removed, #182). Hardware gain is fixed (nRF52840: 32).
 4. **No noise gate, no silence detection.** This mic is too weak for a fixed gate. Instead, `rhythmStrength` and `plpPulse` fade out 2-4 s after the last onset.
 5. **Pattern slot cache** (v82): every 4 beats the current pattern is compared with 4 cached 16-bin digests. Similarity above `slotswitchthresh` (0.70) recalls the cached pattern.
@@ -73,11 +72,11 @@ PDM Microphone (16kHz, mono)
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **Tracker harness** | `tests/tracker/` | Real tracker code on edm/ audio on the host; deterministic, runs in CI. Reports onset F1/precision with the device scorer |
-| **Device eval (workstation)** | `tools/device_eval.py` | A device on this machine's USB: plays edm/ through the speakers, scores its onsets with the server's scorer. Windows or Linux |
-| **blinky-server** | `blinky-server/` | Fleet management, on-device test orchestration, scoring (REST API, port 8420) |
-| **blinky-serial-mcp** | `blinky-serial-mcp/` | MCP tools for Claude (thin HTTP client for blinky-server) |
-| **Test audio** | `blinky-test-player/music/edm/` | 18 tracks + `.onsets_consensus.json` ground truth + `track_manifest.json` |
+| **Tracker harness** | `tests/tracker/` | Real tracker code on edm/ audio on the host; deterministic, runs in CI. Reports drum metrics, onset F1 with the device scorer, and repetition consistency |
+| **Device eval (workstation)** | blinky_time [`tools/device_eval.py`](https://github.com/Jdubz/blinky_time/blob/master/tools/device_eval.py) | A device on this machine's USB: plays edm/ through the speakers, scores its onsets with the server's scorer. Windows or Linux |
+| **blinky-server** | blinky_time [`blinky-server/`](https://github.com/Jdubz/blinky_time/blob/master/blinky-server) | Fleet management, on-device test orchestration, scoring (REST API, port 8420) |
+| **blinky-serial-mcp** | blinky_time [`blinky-serial-mcp/`](https://github.com/Jdubz/blinky_time/blob/master/blinky-serial-mcp) | MCP tools for Claude (thin HTTP client for blinky-server) |
+| **Test audio** | `corpus/edm/` (the blinky-corpus submodule) | 18 tracks, drum and onset labels, `track_manifest.json` |
 
 ### Quick Commands
 
@@ -89,19 +88,19 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness
 python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
     --compare build/tracker_harness_old --fps 35 60 90
 
-# On device, from a workstation (device on this machine's USB, music from its speakers)
+# On device, from a workstation (device on this machine's USB, music from its speakers; blinky_time's tools/)
 python tools/device_eval.py --port COM3                       # whole corpus, ~13 min
-python tools/device_eval.py --port COM3 --tracks trance-party --commands "set fluxdelta 14"
+python tools/device_eval.py --port COM3 --tracks trance-party --commands "set fluxdelta 10"
 
 # On device: validation suite via the server API (bench test devices only)
 curl -X POST http://blinkyhost.local:8420/api/test/validate \
   -H 'Content-Type: application/json' \
-  -d '{"device_ids": ["DEVICE_ID"], "track_dir": "/path/to/music/edm"}'
+  -d '{"device_ids": ["DEVICE_ID"], "track_dir": "/path/to/corpus/edm"}'
 
 # On device: parameter sweep via the server API
 curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
   -H 'Content-Type: application/json' \
-  -d '{"device_ids": ["D1"], "param_name": "fluxdelta", "values": [5, 7, 9], "track_dir": "/path/to/music/edm"}'
+  -d '{"device_ids": ["D1"], "param_name": "fluxdelta", "values": [6, 8, 10], "track_dir": "/path/to/corpus/edm"}'
 
 # Via MCP tools (poll results with check_test_result(job_id))
 run_test(port: "DEVICE_ID")
@@ -113,6 +112,15 @@ monitor_transients(port: "DEVICE_ID", duration_ms: 5000)
 ```
 
 The harness takes optional overrides as positional arguments (`plpPhaseGain`, `tempoPriorWidth`, `syncopatedCandidateScale`, `pulseOnsetFloor`, `fluxDelta`); pass them through `run_tracker_eval.py --harness-args`. Picker options go through `--harness-opt` (`--onset-max-frames`, `--onset-min-gap`, `--flux-avg-frames`, `--flux-lambda`, `--onset-pattern-bias`). The harness starts from the `AudioTracker.h` member defaults; the `ConfigStorage.cpp` factory values use the same constants.
+
+### Repetition consistency (`repS`), the primary metric for #8
+
+`tests/tracker/consistency.py` scores whether repeated audio gets repeated light, with no labels: the reference is the track's own audio. It finds the track's repeat lag L (a bar or a few), keeps only regions whose audio really matches the audio one lag later, and matches detections there one-to-one with detections one lag later (±32 ms).
+- `rep`: the share of hits that fire in both repeats. 1 = every hit that fires in one repeat fires in the next.
+- `repS`: strength agreement, `1 − Σ|s_a − s_b| / Σ max(s_a, s_b)`, with an unmatched detection paired with 0. 1 = the same hits at the same strengths.
+- `coverage`: the share of time that is a repeated region; `n`: detections scored (below 20, `rep` and `repS` are NaN).
+
+`repS` measures the owner's complaint directly ("somewhat random which hits trigger"), so it is #8's primary number. It doesn't replace the drum metrics: a detector that fires on a fixed grid would score well on `repS` and badly on recall. A consistency change ships only if `repS` goes up without lowering kick recall or on-drum share, or raising noise triggers (`tests/tracker/README.md`). CI runs its unit tests (`tests/tracker/test_consistency.py`).
 
 ### Testing Methodology
 
@@ -131,7 +139,7 @@ The harness takes optional overrides as positional arguments (`plpPhaseGain`, `t
 | **World/Urban** | afrobeat-feelgood-groove, amapiano-vibez, reggaeton-fuego-lento, garage-uk-2step |
 | **Breakbeat** | breakbeat-drive, breakbeat-background |
 
-`blinky-test-player/src/patterns.ts` still defines older synthetic patterns (strong-beats, hat-rejection, etc.). They aren't part of the validation flow.
+blinky_time's [`blinky-test-player/src/patterns.ts`](https://github.com/Jdubz/blinky_time/blob/master/blinky-test-player/src/patterns.ts) still defines older synthetic patterns (strong-beats, hat-rejection, etc.). They aren't part of the validation flow.
 
 ---
 
@@ -145,11 +153,12 @@ Every parameter below is a serial setting: `set <name> <value>`, `get <name>`, `
 
 | Command | Default | Range | Saved | Description |
 |---------|---------|-------|-------|-------------|
-| `fluxdelta` | 7 | 0.5-60 | yes | Flux onset threshold: SuperFlux must exceed its 100 ms mean by this (device onset path) |
+| `fluxdelta` | 8 | 0.5-60 | yes | Flux onset threshold δ: SuperFlux must exceed its 96 ms mean by this (device onset path) |
 | `fluxavgframes` | 6 | 0-16 | runtime | Flux picker moving-average frames (W3, 96 ms) |
 | `onsetmaxframes` | 2 | 0-16 | runtime | Picker: onset must be the max of this many previous frames (W1, 32 ms) |
 | `onsetmingap` | 2 | 0-30 | runtime | Picker: minimum frames between onsets (W5, 32 ms) |
-| `onsetpatternbias` | 0.3 | 0.0-2.0 | runtime | Rhythm-pattern bias: max delta boost off-pattern, 0 = off |
+| `onsetpatternbias` | 0.3 | 0.0-2.0 | runtime | Rhythm-pattern bias: max δ boost where the pattern predicts no hit, 0 = off. Wanted; tune it, don't remove it |
+| `pulsedecay` | 150 | 30-600 ms | runtime | Pulse envelope decay time constant after each onset |
 | `odfpkdecay` | 0.85 | 0.5-0.99 | yes | Flux peak-hold decay per frame (energy synthesis) |
 | `pulseonsetfloor` | 0.55 | 0.0-1.0 | yes | NN activation threshold (NN builds only) |
 | `bassflux` | 0.5 | 0.0-1.0 | yes | Weighted flux bass weight (62-375 Hz; energy synthesis only) |
@@ -171,7 +180,7 @@ Every parameter below is a serial setting: `set <name> <value>`, `get <name>`, `
 | `audio_amp` | 1.0 | 0-1000 | runtime | Diagnostic: scales every AudioControl signal (100 = saturate, 0 = mute) |
 | `nnprofile` | off | bool | runtime | NN per-inference timing output (NN builds only) |
 
-Code-only (no serial command): `acfPeriodMs` 100 (saved), `plpPhaseGain` 0.3, `tempoPriorWidth` 0.8, `syncopatedCandidateScale` 1.0.
+Code-only (no serial command): `acfPeriodMs` 100 (saved), `plpActivation` 0.3 (saved, not read), `plpPhaseGain` 0.3, `tempoPriorWidth` 0.8, `syncopatedCandidateScale` 1.0, SuperFlux λ 32768 (`--flux-lambda` in the harness).
 
 ### Category: `slots` - Pattern slot cache
 
@@ -206,7 +215,7 @@ Each generator has its own category. List them on a device with `show <category>
 
 ### One scorer, three runners
 
-The harness, `tools/device_eval.py` and the server's `/api/test/validate` all score with `blinky-server/blinky_server/testing/scoring.py`:
+The harness, `tools/device_eval.py` and the server's `/api/test/validate` all score all-onset F1 with blinky_time's [`blinky-server/blinky_server/testing/scoring.py`](https://github.com/Jdubz/blinky_time/blob/master/blinky-server/blinky_server/testing/scoring.py) (a secondary number; the drum metrics and `repS` come from `tests/tracker/`):
 - **Reference:** `onsets_consensus` onsets with strength ≥ 0.6, deduplicated at 70 ms.
 - **Latency:** estimated and removed per run.
 - **Matching:** greedy, at ±100 ms (`f1`), with `f1_50ms` and `f1_70ms` reported alongside.
@@ -229,11 +238,11 @@ The click-measured lag is the latency correction (the scorer's `latency_ms`). Th
 
 ### Onset Detection (2026-10)
 
-**SuperFlux + the online picker, NN off on devices (#280).** Drum metrics on edm/: kick + snare labels aligned per track, ±50 ms, host harness at 60 fps. Snare labels are provisional (#284). See `docs/AUDIO_ARCHITECTURE.md` "Onset Detection" for the table.
+**SuperFlux on the onset STFT + the online picker, NN off on devices (#280, #20).** Drum metrics on edm/: kick + snare labels aligned per track, ±50 ms, host harness. Snare labels are provisional (#284). See `docs/AUDIO_ARCHITECTURE.md` "Onset Detection" for the table.
 
 **Test at the device's level.** hat_v1 with music peaks at about 0.0028 FS, roughly −50 dB below the mastered corpus. Evaluate with the corpus scaled to that level and re-quantized to int16, not at file level. λ = 100, chosen from a −20 to +10 dB test, produced no onsets at all on the hat.
 
-`fluxdelta` sweep (λ 32768, host harness, drum F at −60 / −50 / 0 dB): δ 10 0.647 / 0.651 / 0.643, δ 12 0.631 / 0.644 / 0.641, δ 14 0.609 / 0.635 / 0.638. Higher δ trades recall for on-drum share. The NN keeps its 12 ms inference cost (LED fps 48 vs 178 for flux under the cost model).
+`fluxdelta` = 8 was chosen for the onset STFT at device level (−50 dB, 35/60/90 fps) as the largest δ that keeps kick recall at the previous baseline (0.789): δ 8 gives kick R 0.799, snare R 0.629, drum F 0.640, lone hats 25 %, `repS` 0.715; δ 7 gives 0.830 / 0.684 / 0.652 / 32 % / 0.717. Higher δ trades recall for on-drum share. The full sweep is in `OnsetDetector.h`.
 
 ### Rhythm
 
@@ -244,13 +253,7 @@ Factory defaults above. The CI corpus gate (`tracker-harness` job in `.github/wo
 - **Bar-length periods phase-lock worse than beat-length ones.** Syncopation-derived candidates (#166) trade a little tempo accuracy for phase lock on purpose.
 - **Breakdowns without percussion:** rhythm outputs fade (by design, "rhythm needs hits").
 - **Weak mic:** music can sit near the mic's noise floor; that's why there is no gate.
-- Open issues: see `docs/OPEN_ISSUES_2026_10_15.md` and GitHub.
-
----
-
-## Historical Test Results
-
-The February 2026 tables that used to live here measured **beat** F1 with the CBSS/Bayesian tracker (removed in v73-v80). They don't apply to the current tracker or task. For the calibration history, see `blinky-test-player/PARAMETER_TUNING_HISTORY.md` and `docs/ML_IMPROVEMENT_PLAN.md`.
+- Open issues: this repo's GitHub issues (#8 is the consistency umbrella; #20, #26).
 
 ---
 
@@ -264,7 +267,7 @@ The February 2026 tables that used to live here measured **beat** F1 with the CB
 
 1. Build the harness for the old and new code (`tests/tracker/README.md`).
 2. Run `run_tracker_eval.py --harness <new> --compare <old>` on the whole corpus.
-3. Check `recall`, `lock`, `worst20s` and `bpm` per track, at several `--fps` values. The numbers should barely move with fps.
+3. Check kick/snare recall, on-drum share, `repS`, `lock`, `worst20s` and `bpm` per track, at several `--fps` values. The numbers should barely move with fps.
 4. For onset changes, run with the CPU cost model too (`--harness-args --nn-cost-us=... --frame-cost-us=3200 --render-cost-us=4500`) so frame-rate cost shows up.
 
 ### Phase 2: Sweep (if needed)
@@ -277,7 +280,7 @@ The February 2026 tables that used to live here measured **beat** F1 with the CB
 ### Phase 3: Visual check
 
 Watch the fire generator on a bench device with music:
-- one burst per drum hit, hi-hat-dense passages not overly busy,
+- one burst per kick or snare, the same hits firing each time a bar repeats, hi-hat-dense passages not overly busy,
 - breathing (`plpPulse`) in time,
 - no flicker or jarring jumps.
 
@@ -337,118 +340,3 @@ restore_runtime_settings  # Factory settings (old name: defaults)
 - `monitor_transients` — transient detection stats
 - `run_test` / `run_validation_suite` — track evaluation via blinky-server (async; poll `check_test_result`)
 - `get_settings` / `set_setting` / `reset_defaults` — settings (bench devices)
-
----
-
-## Appendix: Removed Parameters
-
-**If you see these parameters in old documentation, ignore them. They have been removed from firmware and testing tools.**
-
-### Removed in SETTINGS_VERSION 67-99 (AudioTracker era)
-
-| Old Parameter | Old Component | Reason |
-|---------------|---------------|--------|
-| `enscooldown`, `ensminconf`, `ensminlevel` | EnsembleDetector | BandFlux/Ensemble pipeline removed (v67) |
-| `odfsmooth`, `odfmeansub`, `combbankenabled`, `combbankfeedback`, `autocorrperiod`, `ft`, `ioi` | AudioController | Replaced by AudioTracker (v73-v80) |
-| `cbssalpha`, `cbsstight`, `cbssthresh`, `beatconfdecay`, `beatoffset`, `phasecorr` | CBSS beat tracker | Removed with AudioController |
-| `musicthresh`, `pulseboost`, `pulsesuppress`, `energyboost` | Output modulation | Removed with AudioController |
-| `bayeslambda`, `bayesprior`, `bayespriorw`, `priorwidth`, `bayesacf`, `bayesft`, `bayescomb`, `bayesioi` | Bayesian tempo fusion | Removed with AudioController |
-| `densityoctave`, `octavecheck`, `octavecheckbeats`, `octavescoreratio` | Octave disambiguation | Removed with AudioController |
-| `stabilitywin`, `lookahead`, `tempochgthresh` | AudioController | Removed |
-| `hwtarget`, `fastagc`, `fastagcthresh`, `fastagcperiod`, `fastagctau` | AGC | AGC removed (v72) |
-| `compenabled`, `compthresh`, `compratio`, `compknee`, `compmakeup`, `compattack`, `comprelease` | Spectral | No longer serial settings (code constants) |
-| `pll`, `pllkp`, `pllki`, `onsetSnapWindow` | PLL | Replaced by PLP (v80) |
-| `rayleighBpm`, `combFeedback`, `percival2`, `percival4` | Comb bank / Percival ACF | Removed (v80) |
-| `odfgate` | Onset information gate | Removed |
-| `pulseNNGate` | Pulse detection | Dead since b114; slot became `fluxonsetfloor` (v97) |
-| `noisegate` | AdaptiveMic | Added v96, removed v98: a fixed gate silences quiet music on this mic |
-| `pulsethreshmult`, `fluxonsetfloor`, `blfastdrop`, `blslowrise`, `pulseminlevel`, `crestgatemin`, `beatgridmin`, `beatgridmin_rs`, `onsetbassgate`, `onsetrearm`, `onsetpeakwindow` | Onset picker and gates | Replaced by SuperFlux + the online picker (v99, #280); see `fluxdelta` |
-| `cooling`, `sparkchance`, `sparkheatmin`, `sparkheatmax`, `audiosparkboost`, `coolingaudiobias`, `bottomrows`, `suppressionms`, `heatdecay`, `emberheatmax`, `spreaddistance`, `embernoisespeed`, `musicemberpulse`, `musicsparkpulse`, `musiccoolpulse` | Old heat-diffusion Fire | Replaced by the particle/heightmap Fire |
-
-### Removed in SETTINGS_VERSION 18-24 (Bayesian Fusion, Feb 2026)
-
-| Old Parameter | Old Component | Reason |
-|---------------|---------------|--------|
-| `hitthresh` | TransientDetector | Moved to per-detector thresholds |
-| `attackmult` | TransientDetector | Moved to per-detector settings |
-| `avgtau` | TransientDetector | Moved to per-detector settings |
-| `cooldown` | TransientDetector | Replaced by `enscooldown` |
-| `adaptthresh` | TransientDetector | Replaced by ensemble architecture |
-| `adaptminraw` | TransientDetector | Replaced by ensemble architecture |
-| `adaptmaxscale` | TransientDetector | Replaced by ensemble architecture |
-| `adaptblend` | TransientDetector | Replaced by ensemble architecture |
-| `priorenabled` | AudioController | Replaced by `bayespriorw` (0 = off) |
-| `priorcenter` | AudioController | Replaced by `bayesprior` |
-| `priorstrength` | AudioController | Replaced by `bayespriorw` |
-| `phaseadapt` | AudioController | Phase is now deterministic (counter-based) |
-| `temposnap` | AudioController | Bayesian fusion handles tempo transitions |
-| `maxbpmchg` | AudioController | Bayesian fusion handles tempo stability |
-| `hyfluxwt` | TransientDetector | Hybrid mode replaced by ensemble architecture |
-| `hydrumwt` | TransientDetector | Hybrid mode replaced by ensemble architecture |
-| `hybothboost` | TransientDetector | Hybrid mode replaced by ensemble architecture |
-| `hpsEnabled` | AudioController | HPS tested and rejected (Feb 2026) |
-| `pulseTrainEnabled` | AudioController | Pulse train tested and rejected (Feb 2026) |
-| `pulseTrainCandidates` | AudioController | Pulse train tested and rejected |
-| `combCrossValMinConf` | AudioController | Comb bank now feeds Bayesian fusion directly |
-| `combCrossValMinCorr` | AudioController | Comb bank now feeds Bayesian fusion directly |
-| `ioiMinPeakRatio` | AudioController | IOI now feeds Bayesian fusion directly |
-| `ioiMinAutocorr` | AudioController | IOI now feeds Bayesian fusion directly |
-| `ftMinMagnitudeRatio` | AudioController | FT now feeds Bayesian fusion directly |
-| `ftMinAutocorr` | AudioController | FT now feeds Bayesian fusion directly |
-
-### Removed in SETTINGS_VERSION 64 (v64 dead code removal, March 2026)
-
-| Old Parameter | Old Component | Reason |
-|---------------|---------------|--------|
-| `fwdfilter` | Forward Filter | A/B tested, severe half-time bias — removed |
-| `fwdtranssigma` | Forward Filter | Removed with forward filter |
-| `fwdfiltcontrast` | Forward Filter | Removed with forward filter |
-| `fwdfiltlambda` | Forward Filter | Removed with forward filter |
-| `fwdfiltfloor` | Forward Filter | Removed with forward filter |
-| `fwdbayesbias` | Forward Filter | Removed with forward filter |
-| `fwdasymmetry` | Forward Filter | Removed with forward filter |
-| `fwdphase` | Forward Phase | Removed with forward filter |
-| `templatecheck` | Octave Disambiguation | A/B tested, no net benefit — removed |
-| `subbeatcheck` | Octave Disambiguation | A/B tested, no net benefit — removed |
-| `noiseest`, `noisesmooth`, `noiserelease`, `noiseover`, `noisefloor` | Noise Estimation | Off by default; no longer serial settings |
-| `adaptight` | Adaptive Tightness | Removed (dead code) |
-| `percival` | Percival Harmonic | Removed (dead code) |
-| `bisnap` | Bidirectional Snap | Removed (dead code) |
-| `pfNoise` | Particle Filter | Removed (dead code) |
-| `pfBeatSigma` | Particle Filter | Removed (dead code) |
-| `pfParticles` | Particle Filter | Removed (dead code) |
-| `barPointerHmm` | HMM Phase Tracker | Removed (dead code) |
-| `hmmContrast` | HMM Phase Tracker | Removed (dead code) |
-| `hmmLambda` | HMM Phase Tracker | Removed (dead code) |
-| `odfSource` | ODF Source Select | Removed (dead code) |
-| `plpphase` | PLP Phase | Removed (dead code) |
-| `plpstrength` | PLP Phase | Removed (dead code) |
-| `plpminconf` | PLP Phase | Removed (dead code) |
-| `fold32` | Misc | Removed (dead code) |
-| `sesquicheck` | Misc | Removed (dead code) |
-| `harmonicsesqui` | Misc | Removed (dead code) |
-| `downwardcorrect` | Misc | Removed (dead code) |
-
-### Removed in AudioController v2/v3 (December 2025)
-
-| Old Parameter | Old Component | Reason |
-|---------------|---------------|--------|
-| `musicbeats` | MusicMode PLL | Event-based activation replaced by autocorrelation strength |
-| `musicmissed` | MusicMode PLL | No beat event counting in new architecture |
-| `phasesnap` | MusicMode PLL | PLL replaced by autocorrelation |
-| `snapconf` | MusicMode PLL | No longer needed |
-| `stablephase` | MusicMode PLL | Phase derived from autocorrelation |
-| `confinc` | MusicMode PLL | Confidence replaced by periodicityStrength |
-| `confdec` | MusicMode PLL | Confidence replaced by periodicityStrength |
-| `misspenalty` | MusicMode PLL | No beat event counting |
-| `pllkp` | MusicMode PLL | No PLL in new architecture |
-| `pllki` | MusicMode PLL | No PLL in new architecture |
-| `combdecay` | RhythmAnalyzer | Merged into AudioController autocorrelation |
-| `combfb` | RhythmAnalyzer | Merged into AudioController autocorrelation |
-| `combconf` | RhythmAnalyzer | Merged into AudioController autocorrelation |
-| `histblend` | RhythmAnalyzer | Merged into AudioController autocorrelation |
-| `rhythmminbpm` | RhythmAnalyzer | Replaced by `bpmmin` |
-| `rhythmmaxbpm` | RhythmAnalyzer | Replaced by `bpmmax` |
-| `rhythminterval` | RhythmAnalyzer | Replaced by `autocorrperiod` |
-| `beatthresh` | RhythmAnalyzer | Replaced by `musicthresh` |
-| `minperiodicity` | RhythmAnalyzer | Merged into `musicthresh` logic |

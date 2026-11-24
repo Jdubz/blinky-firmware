@@ -1,15 +1,15 @@
 # SWD Recovery: XIAO Debug Mate + nRF52840 test chips
 
-How the test box recovers a bricked XIAO nRF52840 Sense over SWD. Covers how
-the hardware behaves, the recovery procedure (`scripts/swd_recover.sh`), the
-traps we hit, and the 2026-11-21 recovery of 06ACEB. Researched and
-bench-verified 2026-11-21; sources are at the end.
+How the test box recovers a bricked XIAO nRF52840 (Sense or Sense Plus; the
+box's chip is a Sense Plus) over SWD. Covers how the hardware behaves, the
+recovery procedure (`scripts/swd_recover.sh`) and the traps to avoid.
+Researched and bench-verified 2026-11-21; sources are at the end.
 
 **Short version:** `./scripts/swd_recover.sh probe`, then
 `./scripts/swd_recover.sh restore`. That CTRL-AP-erases the chip and programs
 MBR + S140 7.3.0 + the fleet bootloader + UICR + the latest stable app + a
 "valid app" settings page, verifying as it goes. It works even when the chip
-is stuck in a reset loop. Test chips only: it erases everything.
+is reset-looping. Test chips only: it erases everything.
 
 ---
 
@@ -41,7 +41,7 @@ and then the target looks dead ("cannot read IDR"). Check `pgrep -a openocd`
 first; `swd_recover.sh` refuses to run if one is alive. To recover the probe,
 kill every OpenOCD and re-authorize it: `echo 0 | sudo tee /sys/bus/usb/devices/<port>/authorized`, then `echo 1`.
 
-## 2. The chip: nRF52840 on the XIAO nRF52840 Sense
+## 2. The chip: nRF52840 on the XIAO nRF52840 Sense / Sense Plus
 
 - **Silicon:** FICR `INFO.VARIANT=0x41414430` is "AAD0", build code D0, **revision 2: legacy APPROTECT**. Protection is off unless UICR.APPROTECT=0x00. ERASEALL leaves it unlocked; it doesn't re-lock like rev 3 (Fxx) parts. CTRL-AP `APPROTECTSTATUS` (AP1 0x00C) reads 1 when unlocked.
 - **CTRL-AP (AP #1):** RESET 0x000, ERASEALL 0x004, ERASEALLSTATUS 0x008, APPROTECTSTATUS 0x00C, IDR 0x0FC = 0x02880000. ERASEALL wipes flash, UICR and RAM, **without needing the core halted**. That's why recovery starts with it. OpenOCD `nrf52_recover` runs it. `nrf5 mass_erase` is different: it uses NVMC and needs a halted core (errata 184).
@@ -81,37 +81,43 @@ reset (CLAUDE.md, 60-second rule).
 1. `probe` should show 0 resets, and `halt; reg pc` should show a PC in the app region (≥0x27000, <0xF4000).
 2. Check that the chip's own USB cable is plugged into the Pi. Power from the Debug Mate hides a missing cable.
 3. After repeated enumeration failures the kernel disables the port (`usbN-portM: Cannot enable. Maybe the USB cable is bad?`). Clear it with `sudo uhubctl -l <hub> -p <port> -a cycle`, or by replugging.
-4. Pi 5 onboard ports can't be power-switched one at a time. A real power-on reset of a chip needs a hub that switches each port individually, or a manual unplug of both cables (the Debug Mate also feeds the chip).
+4. Pi 5 onboard ports can't be power-switched one at a time. The box's Belkin F4U058 hub can (verified 2026-11-21): for a real power-on reset, cycle both the XIAO's and the Debug Mate's ports, since the Debug Mate also feeds the chip.
 
-## 4. 06ACEB (blinky-firmware#12): what happened
+## 4. Bench lessons
 
-- **Before:**
-  - The chip was off the bus. The kernel logged `error -71` and `device not accepting address`, then disabled the port.
-  - It carried bootloader 0.8.0-4-g76d1e60 and an **empty app region**: build b190 had been dropped as a UF2 onto 0.8.0-4, whose UF2 path silently fails to write while the SoftDevice is enabled (see `bootloader/README.md`).
-  - MBR and S140 were byte-identical to the official 7.3.0 image.
-- **The reset loop (cause not yet found):** with no valid app the bootloader enters dual-transport DFU (SoftDevice + USB). A clean test on 2026-11-21 (cold power-on through the hub, read-only SWD) showed **14 resets in 8 s**, so the loop is real and not caused by the debugger. What is known:
-  - Each reset follows the host's enumeration: the device enumerates, the host detects USB mass storage, then the device disconnects (`can't set config #1, error -32`, or SCSI READ(10) failing) and re-enumerates. When the kernel gives up on the port (`Cannot enable`), the host stops talking and **the loop stops**.
-  - RAM survives each reset (so it isn't power-on/brown-out). RESETREAS stays 0, `C_DEBUGEN` gets cleared, the bootloader fault handler's BKPT doesn't fire, and hardware breakpoints on every SYSRESETREQ site (bootloader `NVIC_SystemReset`, the `SystemInit` reset, the MBR's and the SoftDevice's reset code) didn't fire. That last capture ran while the kernel had disabled the port, so it needs repeating while the host is enumerating.
-  - **Retracted:** an earlier capture showed `NRF_FAULT_ID_APP_MEMACC` (SUBSTATWA=0x1, a CLOCK/POWER write). Those runs followed debugger writes to POWER registers (RESETREAS clears, and a mis-addressed write to DCDCEN0), and a clean cold-boot capture showed no fault. Treat MEMACC as a debugger artifact unless it reproduces cleanly. A static census of the bootloader binary found no CLOCK/POWER store that runs after the SoftDevice is enabled.
-  - Next step: an instrumented debug build of the fork (`DEBUG=1`, RTT logging), built in CI, with a control experiment (a second known-good XIAO, and this XIAO on plain USB without the Debug Mate) to separate firmware from bench-setup effects. b217 on this chip also failed USB enumeration (descriptor read timeouts) on the same setup, which points at the setup too.
-- **Suspect hardware (2026-11-21, later):** off the Debug Mate, on a known-good cable and port, 06ACEB shows **no sign of power from its own USB-C**: no LED on a double-tap and no USB event at all. Its USB input (connector or VBUS path) looks faulty, so it was probably powered only through the Debug Mate's 5V pin all along, with a marginal USB data link. That fits every USB symptom (`connect-debounce failed` at host boot before any work, `-71`, "Cannot enable. Maybe the USB cable is bad?", enumerations dying under traffic, and b217 failing to enumerate). **Don't use this board as evidence about the bootloader.** Repeat the no-app DFU test on a known-good XIAO before changing the fork.
-- **Resolved (2026-11-21, healthy board 04F2A796, plain Sense, fleet 0.8.0-10):** the app was blanked over USB only (CDC `bootloader`, then a one-block UF2 writing 0xFF over the vector table at 0x27000), followed by a cold power-on from the hub. **The bootloader enumerated in DFU (UF2 drive + CDC) and stayed up for 150 s with no disconnects. No reset loop.** The loop above was 06ACEB's faulty hardware, not the bootloader. One minor observation: after the one-block UF2 completed, the bootloader didn't reboot by itself; it took the next power cycle.
-- **Recovery:** CTRL-AP erase, then golden image (MBR + S140 7.3.0 + bootloader 0.8.0-10-g4c5faae + UICR + b217 + settings), verified OK. The chip boots b217 directly; `probe` shows 0 resets.
-- **Traps hit:**
-  - A killed OpenOCD survived and held the probe, which made the target look dead.
-  - A wrong-address register write landed in DCDCEN0 (§2).
-  - Halt-and-resume captures reported a SoftDevice assert that the capture itself caused.
+From the 2026-11-21 recovery of 06ACEB (blinky-firmware#12, closed). Its
+apparent no-app DFU "reset loop" was **faulty hardware on that board**: its own
+USB-C input showed no sign of power, so it ran from the Debug Mate's 5V with a
+marginal USB data link. A healthy board (04F2A796, fleet 0.8.0-10, app blanked
+over USB, cold power-on) sat stably in DFU for 150 s. Don't use 06ACEB as
+evidence about the bootloader.
 
-### Bench lessons (2026-11-21)
-
-- **Cutting only the XIAO's hub port is not a cold boot while the Debug Mate is attached.** A core left halted by an SWD session stayed halted through a 3 s VBUS cut: the SWD lines (SWDIO pulled up) kept the idle chip alive. End every SWD session with the core running (`reset run`; `swd_recover.sh restore` does), and for a real power-on reset cut both ports (the XIAO's and the Debug Mate's).
-- **blinky-server won't auto-recover a device within 30 minutes of a UF2 write to it** (the existing cascade guard). A test that flashes a chip and then breaks it waits that long before recovery starts; a real failure doesn't hit it.
+- **Rule out the board and the bench before blaming firmware.** Try a second
+  known-good chip, and the suspect chip on plain USB without the Debug Mate.
+  Power from the Debug Mate hides a dead USB input.
+- **Debugger writes cause the faults you then see.** A `NRF_FAULT_ID_APP_MEMACC`
+  capture followed debugger writes to POWER registers (including a mis-addressed
+  write to DCDCEN0, §2), and halt-and-resume captures report a SoftDevice assert
+  the capture itself caused. Trust only a clean cold-boot capture.
+- **A killed OpenOCD can survive and hold the probe,** which makes the target
+  look dead (§1).
+- **0.8.0-4 silently drops UF2 app writes while the SoftDevice is enabled,**
+  which is how 06ACEB ended up with an empty app region (`bootloader/README.md`).
+  Fixed in 0.8.0-5 and later (the fleet runs 0.8.0-10).
+- **Cutting only the XIAO's hub port is not a cold boot while the Debug Mate is
+  attached.** A core left halted by an SWD session stayed halted through a 3 s
+  VBUS cut: the SWD lines (SWDIO pulled up) kept the idle chip alive. End every
+  SWD session with the core running (`reset run`; `swd_recover.sh restore`
+  does), and cut both ports for a real power-on reset.
+- **blinky-server won't auto-recover a device within 30 minutes of a UF2 write
+  to it** (the cascade guard). A test that flashes a chip and then breaks it
+  waits that long before recovery starts; a real failure doesn't hit it.
+- After a one-block UF2 that blanks the app completes, the bootloader doesn't
+  reboot by itself; it takes the next power cycle.
 
 ## 5. Open items
 
-- ~~Root-cause the no-app DFU reset loop~~: none on a healthy board (§4, "Resolved").
 - Update the Debug Mate firmware (USB serial fix) so pyOCD works and several probes can be told apart.
-- A per-port switchable USB hub for real per-chip power cycling in the box.
 
 ## Sources
 

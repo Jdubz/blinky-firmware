@@ -4,7 +4,7 @@
 
 Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout, one device per update. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
 
-> **Status (2026-10-21): live, USB only, since PR #266.** The Firebase deploy builds with `VITE_FIRMWARE_UPDATES=on` (`.github/workflows/blinky-console-deploy.yml`), which turns on `FIRMWARE_UPDATES_ENABLED` (`blinky-console/src/MainShell.tsx`). To hide the page again, remove that env line and redeploy. Bluetooth is built but hidden (`BLE_UPDATES_ENABLED = false` in `FirmwarePage.tsx`). A person updated a device end to end (`b211-dev` → b215) on 2026-10-20. The owner turned it on with checklist item 2 open and item 4 parked; recovery over USB on Windows is still limited (see [Recovery](#recovery)). `blinkytime.joshwentworth.com` (no hyphen) redirects here.
+> **Status (2026-10-21): live, USB only, since blinky_time PR #266.** The Firebase deploy builds with `VITE_FIRMWARE_UPDATES=on` (`.github/workflows/blinky-console-deploy.yml`), which turns on `FIRMWARE_UPDATES_ENABLED` (`blinky-console/src/MainShell.tsx`). To hide the page again, remove that env line and redeploy. Bluetooth is built but hidden (`BLE_UPDATES_ENABLED = false` in `FirmwarePage.tsx`). A person updated a device end to end (`b211-dev` → b215) on 2026-10-20. The owner turned it on with checklist item 2 open and item 4 parked; recovery over USB on Windows is still limited (see [Recovery](#recovery)). `blinkytime.joshwentworth.com` (no hyphen) redirects here.
 
 Code:
 - **Page:** `blinky-console/src/pages/FirmwarePage.tsx`.
@@ -12,7 +12,7 @@ Code:
 - **Firmware:** `blinky-things/ota/` (`QspiOtaStaging.h`, `OtaManifest.h`, `OtaKeys.h`).
 - **Signing:** `tools/ota_manifest.py`.
 
-Why this route, and what each platform allows (iPhone, Windows UF2, Chrome's DFU blocklist): [WEB_UPDATE_RESEARCH_2026_10.md](WEB_UPDATE_RESEARCH_2026_10.md).
+Why this route, and what each platform allows (iPhone, Windows UF2, Chrome's DFU blocklist): [WEB_UPDATE_RESEARCH_2026_10.md](WEB_UPDATE_RESEARCH_2026_10.md) (research input from 2026-10, kept for the platform constraints).
 
 ## How an update works: signed OTA through the running app
 
@@ -103,29 +103,16 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2,bin,otam
 
 With 0.8.0-11 the drive would also stop timing out back to the app when nothing is copied. It would wait for a file, a reset or an unplug, as upstream Adafruit does. CLAUDE.md and `deploy_local.py`'s messages would have to change with that rollout.
 
-## Bench results (hat_v1, 2026-10-20)
+## Bench results (hat_v1, 2026-10-20): what they established
 
-- **Root cause found and fixed:** the QSPI flash's Quad Enable bit was off. The app and the bootloader both use quad reads and writes, and with QE=0 every staged image read back wrong:
-  - `ota selftest`: CRC mismatch;
-  - the first signed update: `ota commit` → `readback-mismatch`. The device refused, and its old firmware kept running, as designed.
-
-  `QspiOtaStaging::begin()` now sets QE once (`SR2 0x0 → 0x2`, non-volatile) and fails loudly if it can't. The self-test then passed.
-- **Firmware refusals on hardware:** release-signed manifest on a bench-key build → `bad-signature`; older build → `not-newer`; garbage → `bad-magic`; commit with nothing staged → `not-complete`.
-- **Full USB update in a real browser (Chromium, Web Serial):** `b211-dev` → `b212-dev-f10c4772`.
-  - The 484,764-byte image transferred in ~20 s (~24 KB/s).
-  - The device verified it, the bootloader installed it, and the app was back in ~8 s.
-  - Exact-version, identity, config and BLE checks passed, then restore + save and the 75 s hold. Confirmed afterwards over serial.
-  - The only automation stand-in: Chrome's serial-port chooser was answered with the already-permitted port.
-- **Full USB update from a real signed release, by a person on the live mirror:** `b211-dev-15db1bda` (current master, trusting the release key) → **b215**, the first release signed by `sign-release.yml`. Served from a Firebase preview channel of the console with updates on, using the same mirror the live site serves (the `.bin` and `.otam` hashes match the GitHub release). The owner clicked it through in Chrome. Afterwards over serial: `b215-39df3912`, `hat_v1`, configured, 120 fps.
-- **Bluetooth: not working from Windows Chrome yet.**
-  - The hat connected, but every GATT operation took ~5 s and a 10-byte write failed after ~10 s (`GATT operation failed for unknown reason`).
-  - A native client (`bleak`) on the same PC saw an incomplete service table.
-  - The hat restarted on its own shortly afterwards. **Cause found and fixed (#173):** a Windows central negotiates MTU 527, and the NUS send path copied up to 524 bytes into a 244-byte stack buffer, so any reply longer than ~244 bytes smashed the stack and soft-reset the device.
-  - This is the app's existing BLE/NUS stack, not the update protocol, which stays safe over a bad link because nothing is installed until a verified image is complete. See [Open items](#open-items).
+- **QSPI Quad Enable must be set.** With QE=0 every staged image read back wrong (`ota selftest` CRC mismatch, `ota commit` → `readback-mismatch`, old firmware kept running). `QspiOtaStaging::begin()` now sets QE once (non-volatile) and fails loudly if it can't.
+- **The firmware's refusals work on hardware:** wrong key → `bad-signature`, older build → `not-newer`, garbage → `bad-magic`, commit with nothing staged → `not-complete`.
+- **A full USB update works in a real browser,** including from a release signed by `sign-release.yml` and served from the live mirror (a person clicked it through, `b211-dev` → b215). A ~485 KB image transfers in about 20 s (~24 KB/s), and the app is back about 8 s after commit.
+- **Bluetooth from Windows Chrome doesn't work yet.** GATT operations took ~5 s and a write failed. The hat's self-restart during that test was a NUS stack overflow on replies longer than ~244 bytes at MTU 527 (blinky_time#173, fixed). The update protocol itself stays safe over a bad link: nothing is installed until a verified image is complete.
 
 ## Rollout checklist
 
-The page went live (USB) on 2026-10-21 (PR #266), after item 1 and a real end-to-end update by a person (bench results). What's still open:
+The page went live (USB) on 2026-10-21 (blinky_time PR #266), after item 1 and a real end-to-end update by a person (bench results). What's still open:
 
 1. ✅ Done (b215). Merge; cut a candidate (`release.yml`); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`, which has `sign-release.yml` sign it). The mirror then carries the first signed release.
 2. **Open.** Get that release onto devices once by the existing routes (`deploy.sh` for the fleet, `deploy_local.py` for USB devices). Firmware before it can't do signed OTA, and the page says so.
@@ -135,7 +122,7 @@ The page went live (USB) on 2026-10-21 (PR #266), after item 1 and a real end-to
 
 ## Open items
 
-- **Bluetooth from Windows Chrome:** slow GATT operations and a failed write (bench results). The self-restart was #173 (fixed: MTU-sized stack overflow on long replies); NUS commands now also run on the loop task. Still to do: reproduce a full update on Android Chrome, and check the scanner duty cycle (`BleScanner`, window 144 of 160) against connection events.
+- **Bluetooth from Windows Chrome:** slow GATT operations and a failed write (bench results). The self-restart was blinky_time#173 (fixed: MTU-sized stack overflow on long replies); NUS commands now also run on the loop task. Still to do: reproduce a full update on Android Chrome, and check the scanner duty cycle (`BleScanner`, window 144 of 160) against connection events.
 - **Authenticated console commands:** `bootloader ble`, `device upload`, `wipe_device_identity` etc. are accepted from any NUS central or broadcaster. Signing the update path doesn't cover them.
 - **Power loss during the bootloader's copy:** the apply request is one-shot (RAM/`GPREGRET`). A power cut mid-copy leaves the device in its bootloader, which is recoverable but not self-healing. Fix: a persistent "copy pending" marker in the bootloader.
 - **Hub-driven updates** (blinkyhost offering the stable release to personal devices in range) are deferred by decision.

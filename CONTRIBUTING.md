@@ -74,8 +74,8 @@ We welcome various types of contributions:
 
 - **Main sketch**: `blinky-things/blinky-things.ino`
 - **Firmware code**: subfolders of `blinky-things/` (see [blinky-things/README.md](blinky-things/README.md)). A new `.cpp` in a subfolder must be added to `BlinkyImplementations.h`, or Arduino won't compile it.
-- **Device configs**: JSON files in `devices/registry/` (uploaded at runtime, not compiled in)
-- **Documentation**: Additional docs in `docs/` directory (index: [docs/README.md](docs/README.md))
+- **Device configs**: JSON files in blinky_time's [`devices/registry/`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry) (uploaded at runtime, not compiled in)
+- **Documentation**: Additional docs in `docs/` directory (index: the Documentation Index in [CLAUDE.md](CLAUDE.md))
 - **No silent fallbacks**: invalid state must fail loudly (see CLAUDE.md, "No Silent Fallbacks")
 
 ### Commit Messages
@@ -101,7 +101,7 @@ When contributing code changes:
 1. **Test on a test device** listed in `devices/test_devices.json`. Flash it with `python tools/deploy_local.py --port <port> --device-id <id> --dev` (a dev build of a clean, committed tree).
 2. **Never flash a dev build to any other device.** Only stable releases go to fleet and personal devices ([docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md)).
 3. **Leave at least 60 s of uptime between resets** (see CLAUDE.md, "60-second rule").
-4. **Validate audio responsiveness** on the validation corpus (`blinky-test-player/music/edm/`).
+4. **Validate audio responsiveness** on the validation corpus (`corpus/edm/`).
 
 ### Testing Checklist
 

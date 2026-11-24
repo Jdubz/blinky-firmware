@@ -40,7 +40,7 @@ blinky-things/
 └── types/                         # PixelMatrix, BlinkyAssert, FrameClock, Version.h (generated)
 ```
 
-Device layouts are not compiled in. Each device gets its config as JSON (from `devices/registry/` at the repo root) through the `device upload` command, stores it in flash, and loads it at boot with `config/DeviceConfigLoader`.
+Device layouts are not compiled in. Each device gets its config as JSON (from blinky_time's [`devices/registry/`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry)) through the `device upload` command, stores it in flash, and loads it at boot with `config/DeviceConfigLoader`.
 
 ## 🎯 Design Principles
 

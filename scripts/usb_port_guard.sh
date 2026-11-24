@@ -25,7 +25,7 @@
 #   ./scripts/usb_port_guard.sh check_port <port>
 #       Exit 0 if port is healthy (disable=0), non-zero if disabled.
 #
-# Integrate into deploy-bootloader.sh / bl_iter_test.sh: call
+# Integrate into deploy-bootloader.sh / bl_characterize.sh: call
 # `usb_port_guard.sh wait_safe` after each flash before the next.
 
 set -uo pipefail

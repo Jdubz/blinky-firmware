@@ -1,6 +1,6 @@
 # Audio-Reactive Architecture (AudioTracker)
 
-> **Last checked against the code: 2026-10-21 (SETTINGS_VERSION 98, after PR #268).** The task is **onset detection** (fire on every percussive hit), not beat detection. The only validation corpus is `blinky-test-player/music/edm/`, scored against `.onsets_consensus.json`. Older F1 numbers on the deleted `edm_holdout` corpus are gone from this doc on purpose. When in doubt, `audio/AudioTracker.{h,cpp}` and `audio/SharedSpectralAnalysis.h` win.
+> **Last checked against the code: 2026-11-23 (SETTINGS_VERSION 100).** The task is **drum-hit detection** (kicks and snares, on the beat or not), not beat or all-onset detection. The only validation corpus is `corpus/edm/` (the blinky-corpus submodule), scored with the drum metrics against the drum labels and with repetition consistency (`repS`, below). When in doubt, `audio/AudioTracker.{h,cpp}`, `audio/OnsetDetector.h` and `audio/SharedSpectralAnalysis.h` win.
 
 ## Overview
 
@@ -14,11 +14,13 @@ AudioTracker turns the microphone into one `AudioControl` struct that the genera
 
 **Phase/pattern:** The bass-flux buffer is epoch-folded at the chosen period (recency-weighted, Winsorized, per-bin reliability). The pattern is stored accent-aligned (bin 0 = accent), and `plpPulse` is the pattern read at the current phase. The phase keeps absolute time on the mic's sample clock (see Frame Clock).
 
-**Onset detection:** the task is drum hits (kicks and snares). On devices: SuperFlux (Böck & Widmer, DAFx-13) through the online peak picker of Böck, Krebs & Schedl (ISMIR 2012) (`BLINKY_ONSET_NN_ENABLED=0`). The NN path (FrameOnsetNN through the same picker) is kept only in the host NN harness; it is shelved on the nRF52840 (`docs/ML_IMPROVEMENT_PLAN.md`, 2026-11-03). See "Onset Detection" below.
+**Onset detection:** the task is drum hits (kicks and snares). On devices: SuperFlux (Böck & Widmer, DAFx-13) through the online peak picker of Böck, Krebs & Schedl (ISMIR 2012) (`BLINKY_ONSET_NN_ENABLED=0`). The NN path (FrameOnsetNN through the same picker) is kept only in the host NN harness; it is shelved on the nRF52840 (a tie goes to flux; blinky_time [`docs/ML_IMPROVEMENT_PLAN.md`](https://github.com/Jdubz/blinky_time/blob/master/docs/ML_IMPROVEMENT_PLAN.md), 2026-11-03). NN feasibility is now an ESP32-S3 question (`docs/NEXTGEN_ESP32S3_PLAN.md`). See "Onset Detection" below.
 
 **AGC:** Removed (v72). Hardware gain is fixed at the platform value (`Platform::Microphone::DEFAULT_GAIN`: nRF52840 = 32, ESP32-S3 = 30). Window/range normalization is the only dynamic-range system. There is no noise gate (removed again 2026-10-20).
 
-**How it's measured:** `tests/tracker/` runs the real tracker code on edm/ audio at simulated loop rates. Metrics: `lock` (phase consistency at strong onsets), `worst20s`, `recall` (±50 ms), `bpm`. CI gates on them. See `tests/tracker/README.md`.
+**How it's measured:** `tests/tracker/` runs the real tracker code on edm/ audio at simulated loop rates. Hit metrics: kick/snare recall (±50 / ±30 ms), on-drum share and drum F against the cleaned drum labels (the CI corpus gate). Consistency: `rep` / `repS`. Rhythm: `lock` (phase consistency at strong onsets), `worst20s`, `bpm`. See `tests/tracker/README.md`.
+
+**Repetition consistency (`repS`), the primary metric for #8.** Music repeats, so a detector that follows the music fires the same hits, at the same strengths, one repeat apart. `tests/tracker/consistency.py` scores that with no labels: it finds the track's repeat lag, keeps only regions whose audio really matches the audio one lag later, and matches detections there one-to-one. `repS` = `1 − Σ|s_a − s_b| / Σ max(s_a, s_b)` (an unmatched detection pairs with 0; 1 = same hits, same strengths). It doesn't replace the drum metrics: a consistency change ships only if `repS` rises without lowering kick recall or on-drum share. Details: `docs/AUDIO-TUNING-GUIDE.md`.
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -79,7 +81,7 @@ AdaptiveMic (fixed gain + window/range normalization; no AGC, no noise gate)
 SharedSpectralAnalysis (FFT-256, 62.5 Hz frames -> soft-knee compressor -> 50 mel bands + spectral flux)
       |
       +--- [ONSET PATH]
-      |    Devices: SuperFlux on its own onset STFT (Hann 512, hop 128 = 125 fps, #178;
+      |    Devices: SuperFlux on its own onset STFT (Hann 512, hop 128 = 125 fps, #20;
       |         101-band log filterbank, log10(32768 S + 1), +-1 band max filter,
       |         unweighted half-wave sum over bands <= 5 kHz)
       |    NN builds only: FrameOnsetNN activation
@@ -113,7 +115,7 @@ Generators (Fire, Water, PlasmaGlobe ["lightning"], Audio)
 
 **Key Design Decisions:**
 
-1. **Onsets and rhythm use different signals.** Onset detection fires on every percussive hit, on-beat or not. The rhythm sources are tuned for periodicity. When the NN drove an ACF source it locked straight 4/4 to 2/3 tempo and broke DnB (#155: corpus tempo 0.726 → 0.621), so source 2 is the mic level in every build.
+1. **Hits and rhythm use different signals.** Onset detection fires on every kick and snare, on-beat or not. The rhythm sources are tuned for periodicity. When the NN drove an ACF source it locked straight 4/4 to 2/3 tempo and broke DnB (#155: corpus tempo 0.726 → 0.621), so source 2 is the mic level in every build.
 
 2. **Multi-source ACF period detection.** ACF scans beat lags 20-80 on three mean-subtracted sources. Bar candidates come from multiples of the beat peaks. Breakbeat/DnB patterns put the strongest peaks at 1.5 and 2.5 beats, so each beat peak L also yields beat hypotheses 2L/3 and 2L/5 and bar candidates at 2× and 4× of those (#166, `syncopatedCandidateScale`, default 1.0).
 
@@ -250,51 +252,13 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ## Tuning Parameters
 
-All of these are `set <name> <value>` serial settings (category `tracker`, or `slots` for the slot cache) and are saved by `save`. Defaults are the factory values in `ConfigStorage.cpp`. For the full list, see `docs/AUDIO-TUNING-GUIDE.md`.
-
-### Tempo Detection
-
-| Parameter | Serial Name | Default | Range | Description |
-|-----------|-------------|---------|-------|-------------|
-| `bpmMin` | `bpmmin` | 15 | 10-120 | Lowest reported BPM (15 lets a full bar at 60 BPM count as one period) |
-| `bpmMax` | `bpmmax` | 200 | 120-240 | Highest reported BPM |
-| `tempoSmoothing` | `temposmooth` | 0.85 | 0.5-0.99 | BPM EMA smoothing (higher = slower) |
-
-`acfPeriodMs` (100 ms) is persisted but has no serial command. `tempoPriorWidth` (0.8), `syncopatedCandidateScale` (1.0) and `plpPhaseGain` (0.3) are code defaults only.
-
-### PLP Pattern
-
-| Parameter | Serial Name | Default | Range | Description |
-|-----------|-------------|---------|-------|-------------|
-| `plpConfAlpha` | `plpconfalpha` | 0.25 | 0.01-0.5 | Confidence EMA rate |
-| `plpNovGain` | `plpnovgain` | 1.0 | 0.1-5.0 | Power-law exponent on the normalized pattern (>1 sharpens peaks) |
-| `plpSignalFloor` | `plpsigfloor` | 0.10 | 0.01-0.5 | Smoothed mic level that gives full confidence |
-| `plpVarianceSens` | `plpvarsens` | 0.0 | 0-50 | Persisted and tunable, but not read by the current tracker code |
-| `plpDecayRate` | `plpdecay` | 0.2 | 0.05-1.0 | Epoch recency decay (`exp(-rate × epochs)`) |
-
-The pattern slot cache has its own settings (`slotswitchthresh`, `slotnewthresh`, `slotupdaterate`, `slotsaveconf`, `slotseedblend`).
-
-### Rhythm Activation
-
-| Parameter | Serial Name | Default | Range | Description |
-|-----------|-------------|---------|-------|-------------|
-| `activationThreshold` | `activationthreshold` | 0.3 | 0.0-1.0 | Persisted and tunable; not read by the current tracker code |
-
-`plpActivation` is persisted (0.3) but has no serial command and isn't read.
-
-### Other
-
-| Parameter | Serial Name | Default | Description |
-|-----------|-------------|---------|-------------|
-| `odfContrast` | `odfcontrast` | 1.25 | Exponent on bass flux before it enters the OSS buffer |
-| `audioAmp` | `audio_amp` | 1.0 | Diagnostic: scales every AudioControl signal (100 = saturate, 0 = mute). Not saved. |
-| `nnProfile` | `nnprofile` | off | NN inference profiling output (NN builds only) |
+Every tunable (serial name, default, range, saved or runtime) is listed in one place: `docs/AUDIO-TUNING-GUIDE.md`, "All Tunable Parameters". Defaults are the factory values in `config/ConfigStorage.cpp`.
 
 ---
 
 ## Onset Detection: spectral flux on devices; FrameOnsetNN off
 
-**Status (2026-10-19): the NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0`, `AudioTracker.h`). Onset pulses come from spectral flux, which wins on both accuracy and frame rate. Measured on edm/ (onsets_consensus, ±50 ms) with the host harness CPU cost model calibrated to hat_v1 (`tests/tracker/README.md`):
+**The NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0`, `AudioTracker.h`). Onset pulses come from SuperFlux. The first comparison, on all onsets (onsets_consensus, ±50 ms, host harness CPU cost model calibrated to hat_v1, `tests/tracker/README.md`), is kept for the frame-rate cost:
 
 | Detector (onsets_consensus, ±50 ms, cost model) | F1 | Precision | Recall | LED fps |
 |---|---|---|---|---|
@@ -307,14 +271,14 @@ Those are all-onset numbers; detectors are now scored on drums (kick + snare lab
 |---|---|---|---|---|---|---|---|
 | Spectral flux (weighted, adaptive baseline) | 96 ms window + cooldown + gates | 0.243 / 0.543 / 0.603 | 57% | 63% | 20% | 3.1 | 3–6 |
 | SuperFlux, all 78 bands | online (Böck 2012), δ 10, λ 32768 | 0.647 / 0.651 / 0.648 | 55% | 79% | 81% | 4.8 | 0 |
-| SuperFlux ≤ 5 kHz, 62.5 fps frames (before #178) | online (Böck 2012), δ 7, λ 32768 | 0.648 / 0.657 / 0.657 | 56% | 79% | 76% | 4.7 | 0 |
-| **SuperFlux ≤ 5 kHz, onset STFT 512/128 (devices, #178)** | **online at 125 fps, δ 8, λ 32768** | **— / 0.640† / —** | **61%†** | **80%†** | **63%†** | **4.4†** | **—** |
+| SuperFlux ≤ 5 kHz, 62.5 fps frames (before #20) | online (Böck 2012), δ 7, λ 32768 | 0.648 / 0.657 / 0.657 | 56% | 79% | 76% | 4.7 | 0 |
+| **SuperFlux ≤ 5 kHz, onset STFT 512/128 (devices, #20)** | **online at 125 fps, δ 8, λ 32768** | **— / 0.640† / —** | **61%†** | **80%†** | **63%†** | **4.4†** | **—** |
 | v33 NN, floor 0.20 | 96 ms window + cooldown + gates | 0.594 / 0.595 / 0.588 | 50% | 75% | 72% | 5.0 | ~5 |
 | v33 NN, floor 0.55 | online (Böck 2012) | 0.677 / 0.672 / 0.672 | 52% | 95% | 95% | 6.1 | 1–2 |
 
 †Mean over 35 / 60 / 90 fps (`tracker-ab.yml`), not the 60 fps of the other rows; master in the same setup (62.5 fps frames, δ 7): drum F 0.638, kick R 79 %, snare R 73 %, on-drum 58 %. −60 / −40 dB and noise not yet run for it. \*Snare labels are provisional (#284). Noise: steady white or pink noise from −70 to −30 dBFS. Kick timing moves from +4 ms to −4 ms, because the online picker reports the peak frame itself. The harness SuperFlux matches the Python replica of the audit to within 1.3e-4.
 
-The NN is shelved on the nRF52840: on accuracy it ties flux, and a tie goes to flux (`docs/ML_IMPROVEMENT_PLAN.md`, 2026-11-03). The host NN harness (`BLINKY_HOST_NN`) keeps the NN path tested in CI. The section below describes the NN for that case.
+The NN is shelved on the nRF52840: on accuracy it ties flux, and a tie goes to flux (blinky_time [`docs/ML_IMPROVEMENT_PLAN.md`](https://github.com/Jdubz/blinky_time/blob/master/docs/ML_IMPROVEMENT_PLAN.md), 2026-11-03). The host NN harness (`BLINKY_HOST_NN`) keeps the NN path tested in CI. The section below describes the NN for that case.
 
 **Drain-loop livelock (b208-b210, fixed):** `update()` used to keep processing samples that arrived *during* a ~12 ms inference. Every frame looked like the newest, so the NN ran on every frame and starved the renderer: hat_v1 b210 ran at 12 fps with 62.4 inferences/s. `update()` now drains only what was waiting at entry and runs at most one inference. CI gates on simulated fps with and without the NN.
 
@@ -333,7 +297,7 @@ In NN builds it only drives onset detection. It never feeds the rhythm sources (
 Two flux signals, for different jobs:
 
 - **`getSuperFlux()`: onset detection (#280).** SuperFlux (Böck & Widmer, "Maximum filter vibrato suppression for onset detection", DAFx-13):
-  0. **Framing (#178):** SuperFlux has its own STFT, separate from the 256-sample frames: a Hann window of 512 samples (32 ms) right-aligned at the newest sample, hop 128 (8 ms, 125 fps, 75 % overlap), two onset frames per spectral frame (`computeOnsetFrame`). With hop = window, a hit was seen by one frame only, weighted 0.08–1.0 by where it landed: 38 % of edm/ kicks and snares fired at some frame phases and not others (frame-phase study, PR #347). The published framing overlaps heavily: SuperFlux uses Hann 46 ms at 200 fps; the online detector of Böck, Arzt, Krebs & Schedl (DAFx-12) uses Hann 11.6–46 ms, right-aligned, at 100 fps. And an STFT avoids time aliasing only for hop ≤ N/4 with a Hann window (Smith, *Spectral Audio Signal Processing*, "Choice of Hop Size"). 512 / 128 is that bound, inside the published 23–46 ms and 100–200 fps. After the change, 9.6 % of hits are phase-sensitive. The onset path uses magnitudes without the compressor and without noise subtraction (which is off by default). After an overrun, the onset frames whose windows span the gap give 0 (`markDiscontinuity`).
+  0. **Framing (#20):** SuperFlux has its own STFT, separate from the 256-sample frames: a Hann window of 512 samples (32 ms) right-aligned at the newest sample, hop 128 (8 ms, 125 fps, 75 % overlap), two onset frames per spectral frame (`computeOnsetFrame`). With hop = window, a hit was seen by one frame only, weighted 0.08–1.0 by where it landed: 38 % of edm/ kicks and snares fired at some frame phases and not others (frame-phase study, blinky_time PR #347). The published framing overlaps heavily: SuperFlux uses Hann 46 ms at 200 fps; the online detector of Böck, Arzt, Krebs & Schedl (DAFx-12) uses Hann 11.6–46 ms, right-aligned, at 100 fps. And an STFT avoids time aliasing only for hop ≤ N/4 with a Hann window (Smith, *Spectral Audio Signal Processing*, "Choice of Hop Size"). 512 / 128 is that bound, inside the published 23–46 ms and 100–200 fps. After the change, 9.6 % of hits are phase-sensitive. The onset path uses magnitudes without the compressor and without noise subtraction (which is off by default). After an overrun, the onset frames whose windows span the gap give 0 (`markDiscontinuity`).
   1. The magnitudes go through a triangular log-frequency filterbank: 24 bands per octave from 62.5 Hz to 8 kHz, not area-normalised. Edges that round to the same onset-STFT bin (31.25 Hz) are merged, so there are 101 bands, and bins 2–41 are one band each (`SUPERFLUX_EDGES`, generated, with `static_assert`s on its size and voting range).
   2. Each band is log-compressed: `log10(λ·S + 1)`, with λ = `superFluxLambda` = 32768 (the paper's log(1 + X) on int16-scale magnitudes).
   3. Each band is differenced against the previous onset frame, max-filtered over ±1 band, half-wave rectified, and summed with no weights over the bands centred ≤ 5 kHz (85 of 101). The bands above mostly add hats: at device level, lone hats triggered 75% with all bands and 60% with ≤ 5 kHz at the same δ, with kick and snare recall unchanged. At δ 7 it's 45%.
@@ -365,12 +329,12 @@ SharedSpectralAnalysis ─► OnsetDetector ─► OnsetEvidence {count, odf[]} 
 
   The paper's online values are 30 / 100 / 30 ms. W1 = 2 (`onsetmaxframes`), W3 = 6 (`fluxavgframes`, flux only) and W5 = 2 (`onsetmingap`) are set in 62.5 fps spectral frames and scaled by the rate, so they are 32 / 96 / 32 ms at any rate. These are runtime-tunable and not saved. There's no look-ahead: the onset is reported at the step that peaks.
 - **Per-detector δ and average:**
-  - Flux: `fluxdelta`, default 8, saved (settings v100). Re-chosen for the onset STFT at device level (−50 dB, 35/60/90 fps) by the criterion that chose 7 before: the largest δ that keeps kick recall at the previous baseline (0.789). δ 8: kick R 0.799, snare R 0.629, drum F 0.640, lone hats 25 %, repS 0.715; δ 7: 0.830 / 0.684 / 0.652 / 32 % / 0.717. Before #178 (δ 7): 0.789 / 0.727 / 0.638 / 46 % / 0.661. The sweep is in `OnsetDetector.h`. Flux uses the moving average.
+  - Flux: `fluxdelta`, default 8, saved (settings v100). Re-chosen for the onset STFT (#20) at device level (−50 dB, 35/60/90 fps) by the criterion that chose 7 before: the largest δ that keeps kick recall at the previous baseline (0.789). δ 8: kick R 0.799, snare R 0.629, drum F 0.640, lone hats 25 %, repS 0.715; δ 7: 0.830 / 0.684 / 0.652 / 32 % / 0.717. Before #20 (δ 7): 0.789 / 0.727 / 0.638 / 46 % / 0.661. The sweep is in `OnsetDetector.h`. Flux uses the moving average.
   - NN: `pulseonsetfloor`, default 0.55, saved. Its activation is already a probability, so the NN uses a fixed threshold with no moving average. The old 0.20 fired 10/s without the window and cooldown.
 - **What it replaced, and why:**
   - **Deleted** in the same change: the 96 ms local-max window, the tempo-adaptive 40–150 ms cooldown, the adaptive flux baseline (`pulsethreshmult`, `fluxonsetfloor`, `blfastdrop`, `blslowrise`), and the crest, beat-grid, re-arm, bass-ratio and presence gates.
   - **Why:** the cooldown blocked 61–71% of the kicks the old picker missed. The adaptive baseline settled at the noise level, so the old flux fired 3–6/s on steady noise at −60 to −30 dBFS; SuperFlux fires 0. The bass gate cost recall for no drum F. Presence never blocked an onset.
-- **Rhythm-pattern bias** (`onsetpatternbias` 0.3, runtime, 0 = off): while PLP confidence is above 0.3, δ is raised by up to 30% where the pattern predicts no hit. It is on by default and wanted: triggers prefer the music's pattern. The work on it is tuning and improving it where the pattern tracker is wrong or too strict (#340). It is neutral on edm/ drum F and on repetition consistency (`repS` 0.662 on and off, 2026-11-03).
+- **Rhythm-pattern bias** (`onsetpatternbias` 0.3, runtime, 0 = off): while PLP confidence is above 0.3, δ is raised by up to 30% where the pattern predicts no hit. It is on by default and wanted: triggers prefer the music's pattern. The work on it is tuning and improving it where the pattern tracker is wrong or too strict (#8). It is neutral on edm/ drum F and on repetition consistency (`repS` 0.662 on and off, 2026-11-03).
 - **Activation** (onset strength and pulse-envelope input, 0–1):
   - NN: the activation itself.
   - Flux: `1 − 0.7·r^−0.9` with `r = (odf − mean) / δ`, which is 0.30 at the threshold. Below the threshold it is linear to 0.
@@ -395,6 +359,35 @@ Energy is a blend of three sources, with a 0.12-0.20 deterministic "smolder" flo
 
 ---
 
+## Don't retry
+
+Each of these was built and measured, and lost or broke something. Don't re-run them without a new reason. (Issue and PR numbers here are blinky_time's.)
+
+**Onset detection / NN**
+- Mel-spectrogram Conv2D CNNs (v4–v9): 79–98 ms per inference on the nRF52840. Far over the frame budget.
+- Running the NN every other frame: alternating frame latency makes LED animation jerk.
+- PCEN input (v18): onset AUC 0.506, i.e. chance. It normalizes away onset contrast.
+- Delta features (v15) and band-flux input (v17): zero on-device benefit, extra cost.
+- SpecMix / CutMix, SWA, OWBCE proximity loss, global mixup (v12–v14): no gain, or unsound for frame-level labels.
+- Beat-tracker labels (`consensus_v*`, beat_this, allin1, ...) and beat-tracker distillation: they teach the model to skip off-beat hits. The task is drum-hit detection (CLAUDE.md).
+- The NN as a gate on spectral flux: the NN as the primary signal was better when the NN was on.
+- PLP beat-grid AND-gate on onsets (`beatgridmin`, b142): suppressed 65–84% of true onsets. Deleted in #292.
+- A refractory cooldown or stacked gates after the picker (tempo-adaptive cooldown, bass-ratio, crest, presence, re-arm): the cooldown blocked 61–71% of the kicks the old picker missed, usually behind an earlier non-drum detection. Deleted in #292; picking is the Böck 2012 online picker only.
+- An adaptive flux baseline (`pulsethreshmult`, `fluxonsetfloor`): it settled at the noise floor and fired 3–6/s on steady noise.
+- A low-band-only (62–187 Hz) kick flux: bass lines share the band, so it does not separate kicks.
+- SuperFlux voting bands cut below 5 kHz: ≤ 3 kHz drops snare recall to 75%. Frequency alone can't isolate drums.
+- An absolute noise gate, or level-based silence detection: on this weak mic they swallowed quiet music or reset tempo in breakdowns (removed twice; v98).
+- "Wider models don't help": only tested below the published parameter range. See blinky_time's [`docs/ML_IMPROVEMENT_PLAN.md`](https://github.com/Jdubz/blinky_time/blob/master/docs/ML_IMPROVEMENT_PLAN.md) before treating this as settled.
+
+**Rhythm tracking**
+- PLL phase tracking (phase consistency ~0.04, i.e. random), CBSS (removed v75), Bayesian tempo fusion, comb filter bank, Percival harmonic enhancement, Rayleigh prior (removed v80).
+- Forward filter, particle filter, HMM phase tracker, multi-agent, template/sub-beat checks (removed v64).
+- The NN activation as an ACF source (#155): locked straight 4/4 to 2/3 tempo and broke DnB.
+- Band-specific (mid/high flux) epoch-fold: regressed 8–10 of 18 tracks.
+- Duple-support scoring for syncopated tempo (#166): did not help.
+
+---
+
 ## ESP32-S3 Platform Notes
 
 ESP32-S3 support was cut in March 2026; the code below is kept for the next-generation fixtures (`docs/NEXTGEN_ESP32S3_PLAN.md`).
@@ -415,8 +408,8 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 
 | Component | RAM | CPU Time | Notes |
 |-----------|-----|----------|-------|
-| Spectral frame (FFT, compressor, mel, flux) | a few KB | ~3.2 ms/frame on hat_v1 (before #178) | |
-| Onset STFT (2 × Hann 512 FFT + SuperFlux per frame, #178) | ~6 KB (ring, FFT buffers, window, weights) | est. ~2 × 0.7 ms/frame, **not yet timed on device** | harness cost model `--frame-cost-us=4600` (3.2 ms + the estimate) |
+| Spectral frame (FFT, compressor, mel, flux) | a few KB | ~3.2 ms/frame on hat_v1 (before #20) | |
+| Onset STFT (2 × Hann 512 FFT + SuperFlux per frame, #20) | ~6 KB (ring, FFT buffers, window, weights) | **2.7 ms per 16 ms spectral frame, ~17% CPU** (measured on hat_v1, 2026-11-05; twice the 1.4 ms estimate). No dropped frames: the loop held 134–142 fps, longest frame 30 ms | harness cost model `--frame-cost-us=4600` (3.2 ms + the old estimate) |
 | Rhythm buffers | ~22 KB | - | 7 float arrays of 792 (OSS, bass, level, their linear copies, epoch-fold copy) |
 | Scratch buffers | ~4 KB | - | 4 × 264 floats, class members so they stay off the 4 KB loop stack |
 | ACF + PLP analysis | - | ~4 ms every 100 ms (code estimate) | Timed in `lastAcfDurationMs_` / `lastPlpMs_` |
@@ -478,8 +471,9 @@ Channels: `transient`, `rhythm`, `audio`, `generator`, `ensemble`, `all`.
 
 ## Related Documentation
 
-- `docs/AUDIO-TUNING-GUIDE.md` - Parameter tuning instructions
-- `blinky-test-player/PARAMETER_TUNING_HISTORY.md` - Calibration test results
+- `docs/AUDIO-TUNING-GUIDE.md` - Every tunable parameter, test procedures, metrics
+- blinky_time [`blinky-test-player/PARAMETER_TUNING_HISTORY.md`](https://github.com/Jdubz/blinky_time/blob/master/blinky-test-player/PARAMETER_TUNING_HISTORY.md) - Calibration history
+- `docs/ONSET_DETECTION_LITERATURE_2026_05_02.md` - The papers the design rests on
 - `docs/GENERATOR_EFFECT_ARCHITECTURE.md` - Generator design patterns
 - `docs/VISUALIZER_GOALS.md` - Design philosophy (visual quality over metrics)
 - `tests/tracker/README.md` - Host tracker harness and CPU cost model

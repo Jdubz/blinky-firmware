@@ -11,9 +11,9 @@ There are two kinds of tests:
 | [tests/README.md](tests/README.md) | Host tests (timing, OTA manifest, tracker harness, parity) and the CI jobs that run them |
 | [docs/AUDIO-TUNING-GUIDE.md](docs/AUDIO-TUNING-GUIDE.md) | **Primary on-device guide** - Tunable parameters, test procedures, troubleshooting |
 | [blinky_time docs/TESTING_METHODOLOGY.md](https://github.com/Jdubz/blinky_time/blob/master/docs/TESTING_METHODOLOGY.md) | Tiered testing approach, from the host harness up to full on-device validation |
-| [blinky-test-player/PARAMETER_TUNING_HISTORY.md](blinky-test-player/PARAMETER_TUNING_HISTORY.md) | Historical calibration results |
+| [blinky_time blinky-test-player/PARAMETER_TUNING_HISTORY.md](https://github.com/Jdubz/blinky_time/blob/master/blinky-test-player/PARAMETER_TUNING_HISTORY.md) | Historical calibration results |
 
-The only validation corpus is `blinky-test-player/music/edm/` (18 tracks). Ground truth is each track's `.onsets_consensus.json`: the task is onset detection, not beat detection (see [CLAUDE.md](CLAUDE.md)).
+The only validation corpus is `corpus/edm/` (18 tracks; the blinky-corpus submodule). The task is drum-hit detection (kicks and snares), not beat detection: score kick/snare recall and on-drum share against the drum labels, plus repetition consistency (`repS`) (see [CLAUDE.md](CLAUDE.md) and [docs/AUDIO-TUNING-GUIDE.md](docs/AUDIO-TUNING-GUIDE.md)).
 
 ## Quick Start
 
@@ -39,12 +39,12 @@ Run these against test devices, not installed fleet devices.
 # Run validation suite (all tracks, single device)
 curl -X POST http://blinkyhost.local:8420/api/test/validate \
   -H 'Content-Type: application/json' \
-  -d '{"device_ids": ["DEVICE_ID"], "track_dir": "/path/to/blinky-test-player/music/edm"}'
+  -d '{"device_ids": ["DEVICE_ID"], "track_dir": "/path/to/corpus/edm"}'
 
 # Parameter sweep (3 devices, 3 values)
 curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
   -H 'Content-Type: application/json' \
-  -d '{"device_ids": ["D1","D2","D3"], "param_name": "fluxdelta", "values": [5, 7, 9], "track_dir": "/path/to/blinky-test-player/music/edm"}'
+  -d '{"device_ids": ["D1","D2","D3"], "param_name": "fluxdelta", "values": [6, 8, 10], "track_dir": "/path/to/corpus/edm"}'
 
 # Poll for results
 curl http://blinkyhost.local:8420/api/test/jobs/{job_id}
