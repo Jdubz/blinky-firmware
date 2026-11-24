@@ -49,12 +49,11 @@ The XIAO's 3.3 V regulator supplies about 250 mA, enough only for a short, dim s
 
 ### Test box LED grid
 
-The test box chip drives an 8x8 grid. It sits in a XIAO Debug Mate, so:
-- data comes from D10, through the Debug Mate's D10 header pin (a direct wire; avoid D6/D7, which go through its UART switch);
-- the grid has its own 5 V supply (64 LEDs at full white is ~3.8 A). The Debug Mate's socket "GND" is a current-sense shunt and its 5 V is rated 1 A, so it never powers LEDs;
-- 330 Ω in series with data at the grid, and ~1000 µF across the grid's input.
-
-Wiring and the rest of the bench: blinky_time `docs/TEST_BOX_BUILD_PLAN.md`.
+The test box chip (device config `testbox_grid_v1`, a listed test device) drives an 8x8 WS2812 grid. As wired and checked on the rig (2026-11-23):
+- The chip sits in a XIAO Debug Mate with its own USB-C on the hub. Data comes from D10 through the Debug Mate's D10 header pin. In Seeed's Debug Mate V1.0 KiCad netlist every D0–D10 header pin is a direct trace to the socket (nothing else on the net) except D6/D7, which go through the UART analog switch. The header's GND pin is the XIAO's GND net (`XIAO_5V-`, the low side of the Debug Mate's power-meter shunt).
+- The grid runs from its own external 5 V supply, not from the XIAO or the Debug Mate.
+- 3.3 V data drives this grid directly; no level shifter is needed.
+- Wiring order, seen from the front: data enters at the bottom-right LED; each row runs right to left, rows go bottom to top, no serpentine. That is `HORIZONTAL` (orientation 0) rotated 180°.
 
 ### Power Requirements
 - **LED Current**: ~60mA per LED at full brightness
