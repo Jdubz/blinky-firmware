@@ -183,7 +183,8 @@ Don't use `tools/uf2_upload.py --uf2` directly: it skips all three safety
 layers. (`make bootloader-update` / `bootloader-update-all` now refuse, #270.)
 
 **Always test on a sacrificial bench device first** (reset button and SWD
-pads reachable; `swd-flash.local` for recovery). Verify the new bootloader
+pads reachable; SWD recovery through a XIAO Debug Mate with
+`scripts/swd_recover.sh`, `docs/SWD_RECOVERY.md`). Verify the new bootloader
 boots the existing app and that every DFU path still brings up USB. Only
 after that: other devices. Mind CLAUDE.md's 60-second rule between resets.
 

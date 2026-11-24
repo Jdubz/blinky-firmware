@@ -44,7 +44,7 @@ Besides the host tests above, `pr-validation.yml` runs:
 - **Onset Model Input Check** (`tools/check_model_input.py`) - the embedded model fits the firmware's limits
 - **Blinky Server Tests** and **Blinky Console Tests**
 
-Which of these block a merge is listed in [.github/BRANCH_PROTECTION.md](../.github/BRANCH_PROTECTION.md).
+Which of these block a merge is set in this repo's branch protection on GitHub; `master` also requires `Hardware test (staging)` ([docs/RELEASE_PROCESS.md](../docs/RELEASE_PROCESS.md)).
 
 ### Local Pre-commit Testing
 Before pushing:
@@ -60,7 +60,7 @@ Before pushing:
 These files predate the runtime device config and the current flashing rules:
 
 - `test_runner.ino`, `BlinkyTest.h/.cpp`, `unit/`, `integration/` - an on-device test sketch
-- `validate_configs.py` - checks the old compiled-in `blinky-things/devices/*.h` configs. Devices now use the JSON configs in `devices/registry/`.
+- `validate_configs.py` - checks the old compiled-in `blinky-things/devices/*.h` configs. Devices now use the JSON configs in blinky_time's [`devices/registry/`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry).
 
 To test on hardware, flash a test device (`devices/test_devices.json`) with `python tools/deploy_local.py --port <port> --device-id <id> --dev` and use the on-device tests in [TESTING.md](../TESTING.md).
 

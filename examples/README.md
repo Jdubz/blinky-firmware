@@ -1,6 +1,6 @@
 # Examples Directory
 
-This directory contains code snippets for the Blinky Time firmware. They are reference material, not built or tested by CI, and some have fallen behind the firmware (noted below). Device configurations are not examples any more: they are JSON files in `devices/registry/`, uploaded at runtime.
+This directory contains code snippets for the Blinky Time firmware. They are reference material, not built or tested by CI, and some have fallen behind the firmware (noted below). Device configurations are not examples any more: they are JSON files in blinky_time's [`devices/registry/`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry), uploaded at runtime.
 
 ## Available Examples
 

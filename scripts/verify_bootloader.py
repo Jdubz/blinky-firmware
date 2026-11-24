@@ -305,7 +305,8 @@ def main() -> int:
             "  the SoftDevice is enabled. In dual-transport DFU mode SD\n"
             "  is enabled even on UF2-triggered DFU (is_ota()==false), so\n"
             "  the existing is_ota() gate is the wrong check.\n"
-            "  Reference: docs/BOOTLOADER_PRODUCTION_AUDIT_2026_05_15.md",
+            "  Background: the SD-aware bootloader_settings_save fix in 0.8.0-10\n"
+            "  (CLAUDE.md, \"Current fleet BL\").",
             file=sys.stderr,
         )
         if uses_is_ota:

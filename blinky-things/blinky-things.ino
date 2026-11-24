@@ -131,6 +131,7 @@ FakeAudio fakeAudio;  // Synthetic 120 BPM audio for visual design/debug ("fakea
 void renderFrame() {
   // Generate -> Effect -> Render -> Display pipeline
   if (pipeline && audioController) {
+    pipeline->testPattern().update(millis());
     if (fakeAudio.isEnabled()) {
       AudioControl fakeCtrl = fakeAudio.getControl();
       pipeline->render(fakeCtrl);
@@ -139,6 +140,9 @@ void renderFrame() {
       pipeline->render(audio);
     }
     leds->show();
+    // The frame is now queued to the LEDs (non-blocking DMA; they latch ~30 us/LED later):
+    // stamp any test-pattern flash edge it carries.
+    pipeline->testPattern().shown(millis());
   }
 }
 
@@ -228,7 +232,7 @@ void setup() {
   // those across power cycles. MUST be called after configStorage.begin()
   // (which initializes LittleFS) and BEFORE the rest of setup (so we trip
   // recovery before any potentially-crashing component runs).
-  // See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F4).
+  // See docs/BOOTLOADER_WORKFLOW.md §5b (F4).
   RebootFrequencyCounter::checkAndIncrement();
   validDeviceConfig = DeviceConfigLoader::loadFromFlash(configStorage, config);
   if (!validDeviceConfig) {
@@ -613,7 +617,7 @@ void setup() {
     // BLE DFU service — allows wireless firmware updates from fleet server.
     // Failure is not fatal (NUS-based `bootloader ble` still works), but it
     // removes a recovery path on sealed sculpture devices, so log loudly per
-    // no-silent-fallbacks rule. See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F6).
+    // no-silent-fallbacks rule. See docs/BOOTLOADER_WORKFLOW.md §5b (F6).
     {
       err_t bleDfuErr = bleDfu.begin();
       if (bleDfuErr != ERROR_NONE) {
@@ -721,7 +725,7 @@ void setup() {
   // Deferred to loop() once millis() >= 60000 — a runtime crash that happens
   // after setup() completes but before that point should still count toward
   // the boot-fail threshold and eventually trigger BLE DFU recovery on sealed
-  // devices. See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F3).
+  // devices. See docs/BOOTLOADER_WORKFLOW.md §5b (F3).
 
   Serial.print(F("[BOOT] Watchdog active, boot attempt #"));
   Serial.println(SafeBootWatchdog::getBootCount());
@@ -732,7 +736,7 @@ void loop() {
 
   // Deferred markStable: keep the boot-fail counter armed for the first 60s
   // of runtime, so that a crash shortly after setup() still counts toward the
-  // BLE DFU recovery threshold (F3 in SCULPTURE_BLE_RECOVERY_PLAN.md). After
+  // BLE DFU recovery threshold (F3 in docs/BOOTLOADER_WORKFLOW.md §5b). After
   // 60s of stable uptime we assume the boot succeeded and clear the counter.
   static bool stableMarked = false;
   if (!stableMarked && millis() >= 60000) {

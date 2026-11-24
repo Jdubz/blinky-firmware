@@ -29,7 +29,7 @@ Channels and the release flow: [RELEASE_PROCESS.md](RELEASE_PROCESS.md). Don't d
 
 ### Recovery (nRF52840 bricked by DFU upload)
 
-Test chips on the test box recover over SWD through their XIAO Debug Mate: `scripts/swd_recover.sh` (see [SWD_RECOVERY.md](SWD_RECOVERY.md)). A Raspberry Pi Zero W at `swd-flash.local` is provisioned for SWD recovery (see CLAUDE.md for invocation). It has the known-good fleet bootloader, MBR, and SoftDevice S140 7.3.0 hex files staged. Use this as the recovery of last resort when a device drops off USB and isn't reachable via BLE.
+Test chips on the test box recover over SWD through their XIAO Debug Mate: `scripts/swd_recover.sh probe`, then `restore` (see [SWD_RECOVERY.md](SWD_RECOVERY.md)). That is the only SWD path (the swd-flash.local Pi was retired 2026-11-23). A fleet device off the box can be recovered over SWD only with physical access to a Debug Mate. Use it as the last resort when a device drops off USB and isn't reachable via BLE.
 
 ### Unresponsive Device Runbook
 
@@ -39,7 +39,7 @@ Installed nRF52840 devices are physically enclosed — reset buttons are **not**
    ```bash
    uhubctl -a cycle -p <port>
    ```
-   Does NOT work on `cart_inner` / `cart_outer` — those are externally powered, so toggling the host USB hub only affects data lines. For those, use the firmware `bootloader` serial command, SWD via `swd-flash.local`, or the physical reset button.
+   Does NOT work on `cart_inner` / `cart_outer` — those are externally powered, so toggling the host USB hub only affects data lines. For those, use the firmware `bootloader` serial command, the physical reset button, or SWD on a Debug Mate (physical access).
 
 2. **Re-flash via blinky_time's deploy.sh** (forces a known-good firmware state):
    ```bash
@@ -49,7 +49,7 @@ Installed nRF52840 devices are physically enclosed — reset buttons are **not**
 
 3. **If the serial port disappeared entirely:** wait 10 seconds and check `ls /dev/ttyACM*`. USB re-enumeration after DFU or crash recovery is not instantaneous.
 
-4. **Last resort:** SWD via `swd-flash.local`, or physical access if available. Most production fleet is sealed — exhaust the SWD path first.
+4. **Last resort:** SWD through a XIAO Debug Mate (`scripts/swd_recover.sh`), which needs physical access. Most of the production fleet is sealed, so exhaust the USB and BLE paths first.
 
 > **Test chips (unenclosed bare chips on bench):** always test risky or untested firmware on these first. Reset button and SWD recovery pads are directly accessible.
 
@@ -73,112 +73,9 @@ For bare-chip recovery (device not enrolled in fleet), `make uf2-upload UPLOAD_P
 
 ---
 
-## 🔲 Multi-Platform Development
+## Platform code
 
-The firmware supports XIAO nRF52840 Sense and XIAO ESP32-S3 Sense from a single codebase.
-
-### Platform Detection
-
-All platform-specific branching flows through `hal/PlatformDetect.h`:
-
-```cpp
-#if defined(ESP32)
-  #define BLINKY_PLATFORM_ESP32S3  1
-#elif defined(ARDUINO_ARCH_MBED) || defined(ARDUINO_ARCH_NRF52) || \
-      defined(NRF52) || defined(NRF52840_XXAA)
-  #define BLINKY_PLATFORM_NRF52840 1
-#else
-  #error "Unsupported platform. Add detection to hal/PlatformDetect.h"
-#endif
-```
-
-**Rules:**
-- Never use raw `#ifdef ESP32` or `#ifdef NRF52` outside `PlatformDetect.h`
-- Always use `BLINKY_PLATFORM_*` macros in application code
-- Add new platforms to `PlatformDetect.h` first, then implement HAL
-
-### Platform Detection Macros Reference
-
-| Core | Key Macros Defined |
-|------|--------------------|
-| Seeeduino nRF52 (non-mbed) | `NRF52840_XXAA`, `NRF52` |
-| Seeeduino mbed | `ARDUINO_ARCH_MBED`, `ARDUINO_ARCH_NRF52840` |
-| arduino-esp32 | `ESP32`, `ARDUINO_ARCH_ESP32` |
-| SAMD (Arduino Zero etc.) | `ARDUINO_ARCH_SAMD` |
-| AVR | `__AVR__`, `ARDUINO_ARCH_AVR` |
-
-Note: `ARDUINO_ARCH_*` macros come from `platform.txt` as `-DARDUINO_ARCH_{build.arch}`. They are only present when that core is installed and selected.
-
-### Adding Platform-Specific Code
-
-**Preferred pattern — HAL interface + per-platform implementation:**
-
-```
-hal/
-├── interfaces/IPdmMic.h        ← abstract interface (no platform code)
-├── hardware/Nrf52PdmMic.h/cpp  ← nRF52840 implementation
-├── hardware/Esp32PdmMic.h/cpp  ← ESP32-S3 implementation
-└── DefaultHal.h                ← factory: returns correct impl at compile time
-```
-
-The `DefaultHal.h` factory pattern:
-```cpp
-#ifdef BLINKY_PLATFORM_NRF52840
-  inline Nrf52PdmMic& pdm() { static Nrf52PdmMic i; return i; }
-#elif defined(BLINKY_PLATFORM_ESP32S3)
-  inline Esp32PdmMic& pdm() { static Esp32PdmMic i; return i; }
-#endif
-```
-
-**Guard .cpp files at the file level:**
-```cpp
-// Nrf52PdmMic.cpp
-#include "hal/PlatformDetect.h"
-#ifdef BLINKY_PLATFORM_NRF52840
-#include <PDM.h>
-// ... all nRF52-specific implementation ...
-#endif
-```
-
-This prevents the ESP32 toolchain from seeing `PDM.h` (which doesn't exist on ESP32).
-
-### Key Platform Differences
-
-| Feature | nRF52840 | ESP32-S3 |
-|---------|----------|----------|
-| PDM mic | Hardware PDM interrupt → `onReceive()` callback | I2S peripheral, polling via `poll()` in `AdaptiveMic::update()` |
-| Flash storage | `mbed::FlashIAP` / `InternalFileSystem` | `Preferences` (NVS key-value store) |
-| Battery monitor | GPIO + ADC divider circuit | Not available — all pins set to -1 |
-| Compile output | `.hex` → convert to `.uf2` via `uf2conv.py` | `.bin` → convert to `.uf2` via `uf2conv.py -b 0x10000` |
-| UF2 family ID | `0xADA52840` | `0xc47e5767` |
-
-### Common Pitfalls
-
-**Library not available on target platform**
-Symptom: `fatal error: PDM.h: No such file or directory` when compiling for ESP32.
-Fix: Guard the `#include` and the `.cpp` file with `#ifdef BLINKY_PLATFORM_NRF52840`.
-
-**Library .cpp files cannot be gated from the sketch**
-Arduino compiles library `.cpp` files independently — sketch-level `#define` values do not propagate. Always put platform guards inside the library `.cpp` file itself (or in its header).
-
-**Struct layout differs across platforms**
-The nRF52 (ARM Cortex-M4) and ESP32-S3 (Xtensa LX7) compilers may pad structs differently. `ConfigStorage` stores structs to flash — if struct layout diverges between platforms, the stored data becomes unreadable. Mitigations:
-- Use `__attribute__((packed))` on stored structs
-- Use fixed-width types (`uint32_t`, not `int`)
-- Validate struct size with `static_assert` (will fail at compile time if padding changed)
-- Each platform has a separate NVS namespace / flash region
-
-**`ARDUINO_ARCH_NRF52` vs `NRF52840_XXAA`**
-The mbed and non-mbed Seeeduino nRF52 cores define different macros. `PlatformDetect.h` handles both. Do not add new detection logic outside that file.
-
-### Compiling for Both Platforms
-
-```bash
-./scripts/build.sh --no-bump          # nRF52840, inside the pinned toolchain
-./scripts/build.sh --esp32 --no-bump  # ESP32-S3 (next gen; not pinned yet)
-```
-
-Or via Makefile: `make compile-out` and `make esp32-compile`. Don't call `arduino-cli compile` directly for the nRF52840: it would bypass the pinned toolchain in `.arduino/`.
+All platform branching goes through `hal/PlatformDetect.h` and its `BLINKY_PLATFORM_*` macros; never use raw `#ifdef ESP32` / `#ifdef NRF52` elsewhere. Platform-specific code sits behind a HAL interface (`hal/interfaces/`, `hal/hardware/`, `hal/DefaultHal.h`), and platform `.cpp` files are guarded at file level. The ESP32-S3 side (macros, HAL pattern, platform differences, pitfalls, building) is in [NEXTGEN_ESP32S3_PLAN.md](NEXTGEN_ESP32S3_PLAN.md#multi-platform-code).
 
 ---
 
@@ -306,7 +203,9 @@ set <name> <value>  # Modify value
 save                # Persist to flash
 ```
 
-`save` (and the auto-save 5 s after the last `set`) returns at once. A writer task does the flash write in the background, so the visuals don't freeze (#191); a page erase can still pause a frame for up to ~90 ms. `reboot`, `bootloader` and `ota commit` wait for a pending write before resetting, so nothing saved is lost.
+`save` (and the auto-save 5 s after the last `set`) returns at once. A writer task does the flash write in the background (blinky_time#191). `reboot`, `bootloader` and `ota commit` wait for a pending write before resetting, so nothing saved is lost.
+
+**Known defect:** a settings page erase can still pause a frame for up to ~90 ms. That breaks the rule that LEDs never drop frames, and it is to be fixed, not accepted.
 
 ---
 
@@ -342,7 +241,7 @@ save                # Persist to flash
 
 **Cause**: DFU serial protocol corrupted bootloader
 
-**Fix**: SWD recovery via `swd-flash.local` (see Recovery above). From then on, flash with `deploy.sh` / `deploy_local.py`.
+**Fix**: SWD recovery through a XIAO Debug Mate with `scripts/swd_recover.sh` (see Recovery above). From then on, flash with `deploy.sh` / `deploy_local.py`.
 
 ---
 

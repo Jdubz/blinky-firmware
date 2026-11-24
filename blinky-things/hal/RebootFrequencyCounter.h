@@ -76,7 +76,7 @@
  *     ...
  *   }
  *
- * See docs/SCULPTURE_BLE_RECOVERY_PLAN.md (F4) for design rationale.
+ * See docs/BOOTLOADER_WORKFLOW.md §5b (F4) for design rationale.
  */
 
 #ifdef ARDUINO_ARCH_NRF52

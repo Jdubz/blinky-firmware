@@ -72,6 +72,20 @@ Generator class names have no `Generator` suffix (`Fire`, not `FireGenerator`). 
 
 `scene <generator> <off|rotate|static> <speed 0-2> <hue 0-1>` sets generator and effect in one command (used for fleet broadcasts). A device with `buttonPin` set cycles generators on a button press.
 
+### Test patterns (camera calibration)
+
+`testpattern` replaces the generator and effect output with a fixed pattern, for the test box camera (blinky_time `docs/TEST_BOX_CAMERA_HARNESS_PLAN.md`, "Calibration"). The renderer and LED mapper still run, so a logical (x, y) lights the LED the generators would light there. Runtime only: never saved, and `testpattern off` or a reboot returns to the generator. Code: `render/TestPattern.h`.
+
+| Command | Pattern | For |
+|---|---|---|
+| `testpattern solid R G B` | every pixel one colour | levels, LED PWM |
+| `testpattern pixel X Y R G B` | one pixel lit (logical coordinates), the rest dark | region map, orientation, dead or stuck LEDs |
+| `testpattern flash R G B ON_MS PERIOD_MS COUNT` | all pixels on for `ON_MS`, `COUNT` times (at most 256), one every `PERIOD_MS` plus up to half of it (irregular, so it can't phase-lock to the camera) | the camera's timing reference |
+| `testpattern status` | JSON: mode, `done`, `millis`, `pixels`, `strands`, `usPerPixel`, `latchUs`, and `edges`: `[on, off]` per flash, the `millis()` when that frame was handed to the LEDs | reading a flash train back |
+| `testpattern off` | back to the generator | |
+
+A flash edge is stamped right after `show()` queues the frame. The LEDs latch it after the DMA, `latchUs` later: the pixels per strand × 30 µs (2 ms for 64 LEDs on one strand; `ledPin2` splits them across two strands sent at once). A flash stays lit for at least `ON_MS` from its stamped hand-off. The host puts edges on its own clock with the serial clock sync (`millis` offset).
+
 ## Base Interfaces
 
 ### Generator Interface (`generators/Generator.h`)
@@ -165,7 +179,12 @@ leds.show();
 - **Host (CI):** `tests/timing/timing_test.cpp` runs every generator under UBSan and checks absolute timing (the "Absolute Timing" job in `.github/workflows/pr-validation.yml`).
 - **Host (not in CI):** `tests/unit/` has older audio, fire and LED-mapper tests.
 - **On device, `ENABLE_TESTING` builds only:** `tests/GeneratorTestRunner`, `effects/tests/` and `render/tests/`. These aren't wired to serial commands; the old `generators` / `fire all` / `gen help` test commands no longer exist (`gen` now switches generators).
-- **Render safety:** see `docs/VISUALIZATION_SAFETY_TESTING.md`.
+
+### Render safety
+
+Runaway brightness can overheat LED controllers and the supply, so a frame must never accumulate onto the previous one. The guard is structural: `RenderPipeline::render()` clears the matrix at the start of every frame (`render/RenderPipeline.cpp`; commit 7999748 fixed a missing `clear()`), and `PixelMatrix` stores 8-bit channels, so no pixel can exceed RGB(255,255,255). Don't remove that `clear()` or widen the channel type without a replacement bound.
+
+`blinky-things/tests/RenderPipelineSafetyTest.h` has checks for frame clearing, brightness bounds and colour accumulation, but nothing includes it: it doesn't run on the device or in CI. Wiring it into a host build is open.
 
 ## Benefits of This Architecture
 
