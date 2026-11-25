@@ -447,6 +447,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleRecordCommand(cmd)) return true;   // Phone record mode (BLE)
     if (handleStreamCommand(cmd)) return true;
     if (handleTestCommand(cmd)) return true;   // testpattern (camera calibration)
+    if (handleLedsCommand(cmd)) return true;   // leds (test box brightness override)
     if (handleAudioStatusCommand(cmd)) return true;
     if (handleModeCommand(cmd)) return true;
     if (handleConfigCommand(cmd)) return true;
@@ -560,6 +561,14 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(F(",\"configured\":true}"));
         } else {
             out_.print(F(",\"device\":{\"configured\":false,\"safeMode\":true}"));
+        }
+        // The LEDs' brightness now, and whether the test box's runtime override (`leds`)
+        // set it rather than the device config (render/LedBrightness.h).
+        if (pipeline_ && pipeline_->ledBrightness().attached()) {
+            out_.print(F(",\"ledBrightness\":"));
+            out_.print(pipeline_->ledBrightness().current());
+            out_.print(F(",\"ledOverride\":"));
+            out_.print(pipeline_->ledBrightness().overridden() ? F("true") : F("false"));
         }
 
         out_.print(F(",\"millis\":"));
@@ -976,6 +985,47 @@ bool SerialConsole::handleTestCommand(const char* cmd) {
         return true;
     }
     out_.println(USAGE);
+    return true;
+}
+
+// "leds ...": the test box's runtime LED brightness override (render/LedBrightness.h).
+// Runtime only, never saved; "leds config" or a reboot returns to the device config's
+// brightness. Every reply is the status line, or an ERROR line.
+bool SerialConsole::handleLedsCommand(const char* cmd) {
+    if (strncmp(cmd, "leds", 4) != 0) return false;
+    if (cmd[4] != ' ' && cmd[4] != '\0') return false;
+    if (!pipeline_ || !pipeline_->ledBrightness().attached()) {
+        out_.println(F("ERROR: leds unavailable (no render pipeline)"));
+        return true;
+    }
+    if (!configStorage_ || !configStorage_->isDeviceConfigValid()) {
+        out_.println(F("ERROR: leds unavailable (no device config)"));
+        return true;
+    }
+    LedBrightness& lb = pipeline_->ledBrightness();
+    const uint8_t configured = configStorage_->getDeviceConfig().brightness;
+    const LedBrightness::Parsed p = LedBrightness::parse(cmd + 4);
+    switch (p.action) {
+        case LedBrightness::Action::STATUS:
+            break;
+        case LedBrightness::Action::SET:
+            lb.set(p.value);
+            break;
+        case LedBrightness::Action::CONFIG:
+            lb.config(configured);
+            break;
+        case LedBrightness::Action::INVALID:
+            out_.print(F("ERROR: "));
+            out_.println(LedBrightness::usage());
+            return true;
+    }
+    out_.print(F("{\"brightness\":"));
+    out_.print(lb.current());
+    out_.print(F(",\"config\":"));
+    out_.print(configured);
+    out_.print(F(",\"override\":"));
+    out_.print(lb.overridden() ? F("true") : F("false"));
+    out_.println(F("}"));
     return true;
 }
 
