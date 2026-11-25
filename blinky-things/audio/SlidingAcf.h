@@ -154,7 +154,9 @@ private:
             if (full) {
                 macRun(&lag_[l], &ring_[pn], &ring_[po], q, -old, run);
             } else {
-                macRun(&lag_[l], &ring_[pn], &ring_[pn], q, 0, run);  // nothing leaves yet
+                // Nothing leaves yet (nold = 0); xo must still be `run` valid
+                // elements: ring_[pn + 1 - run .. pn] (run <= pn + 1 above).
+                macRun(&lag_[l], &ring_[pn], &ring_[pn + 1 - run], q, 0, run);
             }
             l += run;
             pn -= run;

@@ -456,10 +456,10 @@ void AudioTracker::runAcfJob(bool finishAll) {
     if (!acfJobDecided_) {
         for (int g = 0; g < acfJobGroups_; g++) {
             if (slot(1 + g) > k) break;
-            const int end = (acfNumCands_ * (g + 1)) / acfJobGroups_;
-            if (end > acfNextCand_) {
+            const int groupEnd = (acfNumCands_ * (g + 1)) / acfJobGroups_;
+            if (groupEnd > acfNextCand_) {
                 const uint32_t t0 = time_.micros();
-                acfScoreCandidates(end);
+                acfScoreCandidates(groupEnd);
                 const uint32_t dt = time_.micros() - t0;
                 acfJobPass2Us_ += dt;
                 acfJobUs_ += dt;
@@ -727,14 +727,14 @@ void AudioTracker::acfSnapshot(int periodFrames) {
     acfStageCost_[ACF_STAGE_SYNC].add(tEnd - tSync, nowMs);
 }
 
-void AudioTracker::acfScoreCandidates(int end) {
+void AudioTracker::acfScoreCandidates(int upTo) {
     // --- Pass 2: Score candidates by epoch-fold pattern quality ---
     // Reuses tempogram Pass 2 logic: the period that produces the highest-contrast
     // pattern is the one that creates the best visual pulse. Each candidate is
     // scored using its own source buffer for fair cross-source comparison.
     // Called in slices; candidates are scored in order with a running best, so
     // the winner is the one a single pass would pick.
-    for (int c = acfNextCand_; c < end; c++) {
+    for (int c = acfNextCand_; c < upTo; c++) {
         const AcfCandidate& cand = acfCands_[c];
         int cPeriod = cand.period;
         int cSource = cand.source;
@@ -824,7 +824,7 @@ void AudioTracker::acfScoreCandidates(int end) {
             acfBestDerived_ = cand.derived;
         }
     }
-    if (end > acfNextCand_) acfNextCand_ = end;
+    if (upTo > acfNextCand_) acfNextCand_ = upTo;
 }
 
 void AudioTracker::acfDecide() {

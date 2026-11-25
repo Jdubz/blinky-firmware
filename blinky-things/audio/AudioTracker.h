@@ -578,7 +578,7 @@ private:
     float acfCentered(int src, int lag);         // mean-subtracted lag sum of the snapshot window
     const float* acfSource(int src) const;       // linearized, mean-subtracted snapshot of a source
     void acfSnapshot(int periodFrames);          // frame 0: linearize, pass 1, candidates
-    void acfScoreCandidates(int end);            // pass 2 for candidates [acfNextCand_, end)
+    void acfScoreCandidates(int upTo);           // pass 2 for candidates [acfNextCand_, upTo)
     void acfDecide();                            // refinement, accent fold, apply period + phase
     void runAcfJob(bool finishAll);              // the steps due at this frame offset
     bool acfPlpDue() const;                      // PLP runs in this frame's job step
