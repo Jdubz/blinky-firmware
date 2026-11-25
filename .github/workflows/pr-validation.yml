@@ -4,10 +4,10 @@ on:
   # Draft PRs run only the cheap checks (seconds each); the heavy jobs (compile, cppcheck,
   # both tracker harnesses, timing, the mel contract, model input, OTA manifest) wait until
   # the PR is ready for review: marking it ready (ready_for_review) starts a run with all of
-  # them (docs/DEV_LOOP.md, section 4). A heavy job skipped on a draft reports "skipped",
-  # which a required check accepts; GitHub never merges a draft, and the ready run's results
-  # replace the skipped ones on the same head. Re-running a run made while the PR was a draft
-  # replays its event and skips them again: mark the PR ready instead.
+  # them (blinky_time docs/DEV_LOOP.md, section 4). A heavy job skipped on a draft reports
+  # "skipped", which a required check accepts; GitHub never merges a draft, and the ready
+  # run's results replace the skipped ones on the same head. Re-running a run made while the
+  # PR was a draft replays its event and skips them again: mark the PR ready instead.
   pull_request:
     branches: [ master, staging ]
     types: [ opened, synchronize, reopened, ready_for_review ]
