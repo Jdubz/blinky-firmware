@@ -96,9 +96,12 @@ SharedSpectralAnalysis (FFT-256, 62.5 Hz frames -> soft-knee compressor -> 50 me
       |      1. bass flux ^ odfcontrast (the "OSS" buffer)
       |      2. bass mel energy (mel bands 0-5)
       |      3. mic level (#155: never the NN)
+      |    ACF from exact incremental lag tables (SlidingAcf.h, updated every frame)
       |    ACF lags 20-80 (step 2) -> top 5 peaks -> x1/x2/x3/x4 + syncopation-derived candidates
       |    Score = ACF x sqrt(fold variance) / sqrt(multiplier) x tempo prior
       |    Fractional period: ACF refined at the K-th repetition (K <= 12)
+      |    One decision is spread over the frames of its cycle (snapshot, pass 2 in thirds,
+      |    decide, PLP), so no loop iteration carries it whole
       |
       +--- [PHASE PATH: PLP]
            Accent measured on the bass-flux fold (whichever source won)
@@ -178,14 +181,15 @@ corpus audio at simulated loop rates).
 4. **Level sample**: `mic_.getLevel()`, into source buffer 2.
 5. **Phase advance**: `elapsedFrames / P_frac` (see Frame Clock).
 
-**Every `acfPeriodMs` (100 ms), once the OSS buffer holds 100 frames:**
-6. **Linearize + mean-subtract** all three sources.
-7. **ACF**: lags 20-80 in steps of 2 on each source; local maxima above 0.05, parabolic refinement; top 5 peaks kept (10% minimum separation).
-8. **Candidates**: each peak × 1/2/3/4, plus syncopation-derived bar candidates; periods up to 264 frames with 2+ epochs in the buffer.
-9. **Scoring**: ACF strength × sqrt(epoch-fold variance) / sqrt(multiplier) × tempo prior.
-10. **Fractional period** and **accent position** (on the bass-flux fold), then phase correction.
-11. **BPM**: `OSS_FRAMES_PER_MIN / P_frac`, clamped to `bpmMin`..`bpmMax`, EMA with `tempoSmoothing`. A BPM change above 15% clears the pattern slots.
-12. **PLP analysis** (`updatePlpAnalysis()`): robust epoch fold, normalization, agreement with the level fold, rotation to accent-aligned storage, confidence update.
+6. **Incremental ACF**: each source's sample enters an exact running table of lag products over the 792-frame window (`SlidingAcf.h`, lags 0-404): it adds its products with the samples before it, and the sample leaving the window takes its products out. Q24 integers in int64 sums, so the table equals a from-scratch sum bit for bit, forever (no drift). The mean-subtracted ACF at any lag follows exactly from the raw sum and two range sums. This is the online sliding-window ACF of madmom (`madmom/features/tempo.py`) and BTrack (Stark, Davies & Plumbley, DAFx 2009).
+
+**Every `acfPeriodMs` (100 ms), once the OSS buffer holds 100 frames:** a decision is spread over the frames of that cycle (`runAcfJob`; frame offset k from the snapshot, at P = 6 frames per cycle):
+7. **k = 0, snapshot**: linearize + mean-subtract all three sources (the snapshot every later step reads), then the **ACF** from the tables: lags 20-80 in steps of 2 on each source; local maxima above 0.05, parabolic refinement; top 5 peaks kept (10% minimum separation); then **candidates**: each peak × 1/2/3/4, plus syncopation-derived bar candidates; periods up to 264 frames with 2+ epochs in the buffer. The tables are held at this window until step 9.
+8. **k = 1-3, scoring**: a third of the candidates per frame, ACF strength × sqrt(epoch-fold variance) / sqrt(multiplier) × tempo prior, running best in candidate order.
+9. **k = 4, decide**: **fractional period** (from the held tables) and **accent position** (on the bass-flux fold), then phase correction toward the target moved on by the frames since the snapshot. **BPM**: `OSS_FRAMES_PER_MIN / P_frac`, clamped to `bpmMin`..`bpmMax`, EMA with `tempoSmoothing`. A BPM change above 15% clears the pattern slots. The tables catch up (3 samples per frame, 1 in the PLP frame, all before the next snapshot).
+10. **k = 5, PLP analysis** (`updatePlpAnalysis()`, on the snapshot): robust epoch fold, normalization, agreement with the level fold, rotation to accent-aligned storage, confidence update.
+
+Every step reads the snapshot, so each decision is the one the old inline code made at the snapshot frame (`tests/tracker/acf_equivalence.py`: all 23,581 decisions on edm/ identical); it is applied 4 frames (64 ms) later. Shorter cycles compress the slots (P = 1 runs everything in one frame); a cycle shortened at runtime finishes the running decision first.
 
 **Every 4 beats:** pattern slot check (recall, reinforce or allocate; template seeding for new slots) when PLP confidence > 0.1.
 
@@ -411,8 +415,9 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 | Spectral frame (FFT, compressor, mel, flux) | a few KB | ~3.2 ms/frame on hat_v1 (before #20) | |
 | Onset STFT (2 × Hann 512 FFT + SuperFlux per frame, #20) | ~6 KB (ring, FFT buffers, window, weights) | **2.7 ms per 16 ms spectral frame, ~17% CPU** (measured on hat_v1, 2026-11-05; twice the 1.4 ms estimate). No dropped frames: the loop held 134–142 fps, longest frame 30 ms | harness cost model `--frame-cost-us=4600` (3.2 ms + the old estimate) |
 | Rhythm buffers | ~22 KB | - | 7 float arrays of 792 (OSS, bass, level, their linear copies, epoch-fold copy) |
+| Incremental ACF tables | ~26 KB (3 × 6.5 KB + 6.5 KB head/tail sums) | ~0.27 ms per frame (3 × 404 lags × ~14 cycles, two SMLALs each; code estimate) | `acfStageUs[6]` (update) |
 | Scratch buffers | ~4 KB | - | 4 × 264 floats, class members so they stay off the 4 KB loop stack |
-| ACF + PLP analysis | - | ~4 ms every 100 ms (code estimate) | Timed in `lastAcfDurationMs_` / `lastPlpMs_` |
+| ACF + PLP analysis | - | ACF ~3.5 ms + PLP 1-2 ms per 100 ms, spread over 6 frames: at most ~2 ms in any one (code estimate; was 17-19.5 ms + 1-2 ms in one frame, measured) | `json info`: `acfUs`/`acfMaxUs` (per decision), `plpUs`/`plpMaxUs`, `acfSliceUs`/`acfSliceMaxUs` (per frame), `acfStageUs`/`acfStageMaxUs` [linearize, pass1, sync, pass2, refine, accent, update] |
 | FrameOnsetNN | 8 KB arena + input window | ~12 ms/inference (NN builds only) | The class and its arena are still in device builds; the model never runs there |
 
 ---
