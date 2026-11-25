@@ -184,6 +184,15 @@ jobs:
         g++ $FLAGS tests/unit/test_test_pattern.cpp build/PixelMatrix.o build/BlinkyAssert.o -o build/test_test_pattern
         build/test_test_pattern
 
+    # leds (the test box's runtime brightness override): the parser refuses what it doesn't
+    # name; the override reaches the strip; `config` returns to the device config's brightness.
+    - name: LED brightness override (UBSan)
+      run: |
+        g++ -std=c++17 -Wall -Wextra -Werror -O1 -g -fsanitize=undefined -fno-sanitize-recover=all \
+          -DARDUINO_ARCH_NRF52 -DBLINKY_PLATFORM_NRF52840 -I blinky-simulator/include -I blinky-things \
+          tests/unit/test_led_brightness.cpp -o build/test_led_brightness
+        build/test_led_brightness
+
   timing:
     # Quoted: unquoted, YAML reads ` #259-#261)` as a comment and the check is named "...phase,".
     name: "Absolute Timing (generators + rhythm phase, #259-#261)"
