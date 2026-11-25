@@ -449,6 +449,39 @@ jobs:
       # Also its mel front end and the bytes' hash, as FrameOnsetNN.h does (#291).
       run: python tools/check_model_input.py
 
+    - name: The mel front-end check refuses what FrameOnsetNN.h refuses (#291)
+      # A header on another front end, none, or a forged waiver hash.
+      run: |
+        pip install pytest
+        python -m pytest -v tests/tools/test_check_model_input.py
+
+  mel-contract:
+    name: Mel Front End Contract (blinky_time#295)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install numpy
+      run: pip install 'numpy>=1.26,<3'
+
+    # The onset NN's input is the mel front end in tests/parity/spec/mel_frontend_v1.json and
+    # its golden vectors; blinky_time carries identical copies and checks training's front end
+    # against them, without this repo's source. Here: the spec is MEL_BANDS[], the constants
+    # and MEL_FRONTEND_VERSION, and the real SharedSpectralAnalysis.cpp (the parity harness)
+    # still produces the golden mel.
+    - name: Build the parity harness and check the firmware against the contract
+      run: |
+        cmake -S tests/parity -B tests/parity/build -DCMAKE_BUILD_TYPE=Release
+        cmake --build tests/parity/build -j
+        python tests/parity/test_mel_contract.py --harness tests/parity/build/parity_harness
+
   tracker-harness-nn:
     name: Tracker Harness with real onset NN (host TFLite Micro)
     runs-on: ubuntu-latest

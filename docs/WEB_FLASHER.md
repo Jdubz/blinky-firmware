@@ -1,6 +1,6 @@
 # Web Updater (blinky-time.joshwentworth.com/#firmware)
 
-> **Where things live (blinky_time#357).** The firmware side (signed OTA in `blinky-things/ota/`, signing, the release mirror in `tools/firmware_release.py`) is this repo's. The page, its checks, the console deploy (`blinky-console/`, `.github/workflows/blinky-console-deploy.yml`) and `scripts/deploy.sh` are [blinky_time](https://github.com/Jdubz/blinky_time)'s; paths below under those names are in that repo.
+> **Where things live (blinky_time#357).** The firmware side (signed OTA in `blinky-things/ota/`, signing, what a stable release is) is this repo's. The release mirror the console serves is built by blinky_time's own copy of `firmware_release.py mirror` (`blinky-server/hosttools/`, through the GitHub API, no firmware checkout); `tools/firmware_release.py mirror` here produces the same output, for local use. The page, its checks, the console deploy (`blinky-console/`, `.github/workflows/blinky-console-deploy.yml`) and `scripts/deploy.sh` are [blinky_time](https://github.com/Jdubz/blinky_time)'s; paths below under those names are in that repo.
 
 Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout, one device per update. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
 
@@ -65,7 +65,7 @@ Before any public page or nearby Bluetooth central could reach that path, it had
 release.yml (candidate bN: hex, uf2; unsigned) ──► release_gate.py (bench gate on a test device)
 release_promote.py bN ──► sign-release.yml (gate passed? sign: bin, otam) ──► verify ──► stable-bN, Latest ──► console redeploy
 .github/workflows/blinky-console-deploy.yml
-   tools/firmware_release.py mirror --out blinky-console/public/firmware --keep 5
+   blinky-server/hosttools/firmware_release.py mirror --out blinky-console/public/firmware --keep 5
 Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2,bin,otam}
 ```
 

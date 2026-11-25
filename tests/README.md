@@ -18,7 +18,7 @@ Each test compiles firmware sources from `blinky-things/` for the host, using th
 | `timing/` | Animations and the rhythm phase keep absolute time: one 2 s frame ends where two hundred 10 ms frames would (#259-#261). Built with UBSan. | `Absolute Timing` | Build command at the top of `timing/timing_test.cpp` (same as CI) |
 | `ota/` | The firmware's signed-OTA manifest verifier and the release signer (`tools/ota_manifest.py`) agree byte for byte | `OTA Manifest` | [ota/README.md](ota/README.md) |
 | `tracker/` | The real `AudioTracker` on recorded audio: UBSan stress, frame-rate gate, and a corpus gate on `corpus/edm/`; optionally with the real onset NN | `Tracker Harness`, `Tracker Harness with real onset NN` | [tracker/README.md](tracker/README.md) |
-| `parity/` | Firmware spectral feature math matches the Python training features | not in CI (run locally); CI's `Feature Parity` job runs only the Python unit tests | [parity/README.md](parity/README.md) |
+| `parity/` | The mel front end matches its contract (`parity/spec/`, shared with blinky_time's training); the shape-feature math matches the Python training features | `Mel Front End Contract` (mel); shape features run locally | [parity/README.md](parity/README.md) |
 
 ### Quick Start
 
@@ -41,7 +41,8 @@ build/timing_test
 Besides the host tests above, `pr-validation.yml` runs:
 - **Compile Firmware** - `scripts/build.sh` with the pinned toolchain, as releases do
 - **Static Analysis (cppcheck)**, **Static Init Safety Check** (`scripts/check_static_init.py`), **Syntax Validation** (`tools/validate_syntax.py`), **Code Quality**, **Documentation Check**
-- **Onset Model Input Check** (`tools/check_model_input.py`) - the embedded model fits the firmware's limits
+- **Onset Model Input Check** (`tools/check_model_input.py`, `tests/tools/test_check_model_input.py`) - the embedded model fits the firmware's limits
+- **Mel Front End Contract** (`tests/parity/test_mel_contract.py`) - the onset NN's mel front end is its spec (`tests/parity/spec/`, shared with blinky_time's training) and still produces the spec's golden vectors
 - **Blinky Server Tests** and **Blinky Console Tests**
 
 Which of these block a merge is set in this repo's branch protection on GitHub; `master` also requires `Hardware test (staging)` ([docs/RELEASE_PROCESS.md](../docs/RELEASE_PROCESS.md)).
