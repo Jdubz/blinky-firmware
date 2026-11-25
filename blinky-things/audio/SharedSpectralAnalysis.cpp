@@ -55,10 +55,11 @@ static_assert(SpectralConstants::NUM_MEL_BANDS == 50
     "Regenerate the table for the new triplet (and add the prior table to a "
     "branch if you need multi-config support).");
 // 50 bands × 30-8000 Hz, 16 kHz / FFT-256 (Nyquist-spanning, v33+).
-// This table, not an HTK filterbank, is the NN's front end: training builds its
-// features from a copy in ml-training/spec/mel_frontend_v1.json, and CI
-// (analysis/test_mel_parity.py, Feature Parity job) fails if the two differ or
-// if computeMelBandsFrom() stops producing ml-training/spec/mel_golden_v1.npz.
+// This table, not an HTK filterbank, is the NN's front end: it is specified by
+// tests/parity/spec/mel_frontend_v1.json (blinky_time's training builds its
+// features from an identical copy), and CI (tests/parity/test_mel_contract.py,
+// Mel Front End Contract job) fails if the two differ or if computeMelBandsFrom()
+// stops producing tests/parity/spec/mel_golden_v1.npz.
 // Changing it means a new spec version and a retrain (#295).
 static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
     {   0,   1,   2 },  // 0:     66 Hz center

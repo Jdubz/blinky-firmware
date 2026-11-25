@@ -77,7 +77,10 @@ def check_spec_matches_firmware(spec: dict) -> None:
     assert fw == spec["bands"], (
         f"spec bands differ from {CPP.name} MEL_BANDS[] at "
         f"{[i for i, (a, b) in enumerate(zip(fw, spec['bands'])) if a != b] or 'length'}")
-    for key, name in (("n_mels", "NUM_MEL_BANDS"), ("fmin", "MEL_MIN_FREQ"),
+    # sample_rate too: the harness injects magnitudes, so the golden run can't see a rate that
+    # gives the same bins other frequencies.
+    for key, name in (("sample_rate", "SAMPLE_RATE"), ("n_mels", "NUM_MEL_BANDS"),
+                      ("fmin", "MEL_MIN_FREQ"),
                       ("fmax", "MEL_MAX_FREQ"), ("db_range", "MEL_DB_RANGE"),
                       ("n_fft", "FFT_SIZE"), ("num_bins", "NUM_BINS")):
         assert float(spec[key]) == header_constant(name), f"spec {key} != firmware {name}"
