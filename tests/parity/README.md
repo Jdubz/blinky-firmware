@@ -16,8 +16,26 @@ the authoritative computation and forces the Python reference to track it.
   which includes `computeShapeFeaturesRaw()`) on injected magnitudes:
   centroid, crest, rolloff, HFC, flatness and raw flux. Each must match
   Python within a tight MAE tolerance.
-- The harness also writes the mel bands, but `run_parity_test.py` does not
-  compare them; mel parity is checked by `ml-training/scripts/validate_features.py`.
+- The harness also writes the mel bands. `test_mel_contract.py` checks them
+  against the mel front-end contract (below); `run_parity_test.py` doesn't.
+
+## Mel front-end contract
+
+`spec/mel_frontend_v1.json` specifies the onset NN's mel front end (the
+`MEL_BANDS[]` table, constants, arithmetic, and `version` =
+`MEL_FRONTEND_VERSION`), and `spec/mel_golden_v1.npz` holds golden vectors:
+magnitude frames and the mel this firmware computes on them, named in the
+spec's `_golden` with their sha256 and tolerances. blinky_time carries
+identical copies (`ml-training/spec/`) and checks training's front end against
+the same vectors, so neither repo reads the other's source.
+
+`test_mel_contract.py --harness build/parity_harness` (CI: the `Mel Front End
+Contract` job) checks that the spec is this firmware's table, constants and
+version, that the golden file is the one the spec names, and that the real
+`SharedSpectralAnalysis.cpp` still produces the golden mel. A deliberate
+change is a new version: bump `MEL_FRONTEND_VERSION`, write
+`mel_frontend_v<N>.json`, run with `--regenerate`, put the printed sha256 in
+the spec, then copy both files to blinky_time in a PR there.
 
 Not yet tested (open follow-ups):
 - FFT (firmware uses CMSIS-DSP / arduinoFFT; Python uses numpy). Feeding
@@ -29,10 +47,10 @@ Not yet tested (open follow-ups):
 
 ## CI
 
-Not run in CI. The `Feature Parity` job in
-`.github/workflows/pr-validation.yml` runs only the Python side's unit tests
-(`python -m analysis.test_shape_features` in `ml-training/`). Run this
-harness locally when you change the feature math on either side.
+The `Mel Front End Contract` job builds the harness and runs
+`test_mel_contract.py` on every PR. The shape-feature comparison
+(`run_parity_test.py`, in blinky_time's `ml-training/`) is not run in CI: run
+it locally when you change the feature math on either side.
 
 ## Build
 
