@@ -9,7 +9,7 @@ Rules:
   name     a known machine name. They're listed as SHA-256 prefixes, so the check doesn't
            publish the names it looks for.
   private  a host named in your own ~/.config/blinky/*.env (local runs only; CI has no such file).
-  mdns     an mDNS name (host.local).
+  mdns     an mDNS name (<host>.local).
   tailnet  a tailnet name (*.ts.net).
   address  a private or tailnet IPv4 address (10/8, 172.16/12, 192.168/16, 100.64/10).
            Use the documentation ranges instead (192.0.2.x, 198.51.100.x, 203.0.113.x) and
@@ -46,7 +46,7 @@ NAME_LENGTHS = range(4, 32)
 
 TOKEN = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")
 PATTERNS = {
-    # host.local, but not ~/.local, .env.local (Vite) or threading.local().
+    # <host>.local, but not ~/.local, .env.local (Vite) or threading.local().
     "mdns": re.compile(r"\b(?!env\.local\b)[A-Za-z0-9][A-Za-z0-9-]*\.local\b(?!\s*\()"),
     "tailnet": re.compile(r"\b[A-Za-z0-9-]+\.ts\.net\b", re.IGNORECASE),
     "address": re.compile(
