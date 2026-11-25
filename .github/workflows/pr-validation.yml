@@ -411,16 +411,20 @@ jobs:
     # is the intent; snare recall also fell (0.727 -> 0.629, not gated).
     #
     # The drum floors are the PRIMARY gate (#294): kick recall at +-50 ms,
-    # on-drum share and drum F against cleaned kick_weighted labels
-    # (blinky-corpus: blinky_scoring/drum_scoring.py). Baseline on master (SuperFlux,
-    # 2026-10-27), means over 35/60/90 fps: kick R 0.789, on-drum 0.583,
-    # drum F 0.638 (the #292 study: 0.79 / 0.56 / 0.657). Snare recall (0.727)
-    # is reported but not gated: provisional until the label fixes in #284.
+    # on-drum share and drum F against the corpus's drum labels
+    # (blinky-corpus: blinky_scoring/drum_scoring.py drum_label_path: complete
+    # human ground truth, else ADTOF). Re-anchored 2026-11-24 when the labels
+    # moved from the band-onset generator to ADTOF (corpus a57b38a, blinky-corpus
+    # #5/#6), keeping the old floors' ~0.02 margins under the baseline. Baseline
+    # (staging, overlapped onset STFT), means over 35/60/90 fps: kick R 0.890,
+    # on-drum 0.570, drum F 0.620, repS 0.715 (against the band labels it was
+    # 0.789 / 0.583 / 0.638). Snare recall (0.891) is reported but not gated:
+    # provisional until hand-curated ground truth (blinky-corpus#4).
     - name: Corpus regression gate (edm/, 35/60/90 fps)
       run: |
         python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
           --min-excess 0.07 --min-tempo 0.66 --min-recall 0.57 \
-          --min-kick-recall 0.77 --min-on-drum 0.56 --min-drum-f 0.62
+          --min-kick-recall 0.87 --min-on-drum 0.55 --min-drum-f 0.60
 
   model-input-check:
     name: Onset Model Input Check
