@@ -50,7 +50,7 @@ Not yet tested (open follow-ups):
 The `Mel Front End Contract` job builds the harness and runs
 `test_mel_contract.py` on every PR. The shape-feature comparison
 (`run_parity_test.py`, in blinky_time's `ml-training/`) is not run in CI: run
-it locally when you change the feature math on either side.
+it locally, from a blinky_time checkout, when you change the feature math on either side.
 
 ## Build
 
@@ -66,12 +66,14 @@ Produces `parity_harness`.
 ## Run via Python wrapper
 
 ```bash
+# in a blinky_time checkout (the repos are separate; the harness is this repo's)
 cd ml-training
 ./venv/bin/python -m analysis.run_parity_test \
     --audio ../corpus/edm/breakbeat-drive.mp3 \
-    --harness ../tests/parity/build/parity_harness
+    --harness <blinky-firmware>/tests/parity/build/parity_harness
 ```
 
-Builds the harness if missing, computes Python mags + features, feeds mags
-to the harness, reads harness feature output, compares, prints MAE per
-feature. Non-zero exit on MAE above threshold.
+Computes Python mags + features, feeds mags to the harness, reads harness
+feature output, compares, prints MAE per feature. Non-zero exit on MAE above
+threshold. `--build-dir <blinky-firmware>/tests/parity/build` in place of
+`--harness` builds the harness there first if it's missing.

@@ -8,7 +8,7 @@ __pycache__/
 *.egg-info/
 **/venv/
 
-# CMake build directories for native harnesses (blinky_time's ml-training/analysis/run_parity_test.py builds tests/parity)
+# CMake build directories for native harnesses (blinky_time's ml-training/analysis/run_parity_test.py --build-dir can build tests/parity here)
 tests/parity/build/
 
 # Compiled binaries (prevent accidental venv/library commits)
@@ -49,8 +49,7 @@ previews/
 scratch/
 
 # Pinned, isolated firmware toolchain (scripts/setup_toolchain.sh, #252)
-# The pinned toolchain: a directory here, or a link to a shared one (the test box links
-# it into blinky_time's firmware/ submodule, blinky_time#357).
+# The pinned toolchain: a directory here, or a link to a shared one.
 .arduino
 
 # Local scratch: host-test build output and deep-research notes

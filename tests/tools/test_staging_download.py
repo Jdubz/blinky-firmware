@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 import firmware_release as fr  # noqa: E402
 
 SHA = "ab" * 20
-SLUG = "Jdubz/blinky_time"
+SLUG = "Jdubz/blinky-firmware"  # the staging build runs here, in this repo
 
 
 def fake_gh(tmp: Path, **over: Any) -> Any:

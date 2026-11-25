@@ -17,6 +17,7 @@
 #include "audio/AudioTracker.h"
 #include "types/BlinkyAssert.h"
 #include "audio/HostCostHook.h"
+#include "acf_reference.h"
 
 #include <cmath>
 #include <cstdint>
@@ -87,7 +88,8 @@ int usage() {
         "  --flux-avg-frames=N --flux-lambda=X  SuperFlux picker average (W3) and log lambda\n"
         "  --flux-delta=X  SuperFlux picker delta (overrides the positional fluxDelta)\n"
         "  --onset-detector=NAME  spectral-flux | onset-nn (NN builds)\n"
-        "  --frame-features=PATH  per-frame feature dump\n");
+        "  --frame-features=PATH  per-frame feature dump\n"
+        "  --acf-trace=PATH  each tempo decision next to the old batch code's on the same snapshot\n");
     return 2;
 }
 
@@ -160,6 +162,29 @@ void hook(void*) {
 }  // namespace FrameDump
 static const char* g_frameFeatures = nullptr;
 
+// ---- Tempo decision trace (--acf-trace=PATH, ACF equivalence) ----
+// One row per decision: the firmware's (incremental tables, spread over the
+// cycle) and the old batch runAcf's (tests/tracker/acf_reference.h) on the
+// same snapshot. tests/tracker/acf_equivalence.py summarizes them.
+namespace AcfTraceDump {
+FILE* out = nullptr;
+const AudioTracker* tracker = nullptr;
+void hook(void*, const AudioTracker::AcfTrace& t) {
+    const AcfRefParams prm{tracker->plpDecayRate, tracker->syncopatedCandidateScale, tracker->tempoPriorWidth};
+    const AcfRefDecision r = acfReferenceDecision(t.sources, t.counts, prm);
+    std::fprintf(out, "%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%.6f,%.6f,%.6f,%.6f,%.7f,%.7f,%.7f,%.7f\n",
+                 t.snapFrame, t.applyFrame, t.valid ? 1 : 0, r.valid ? 1 : 0,
+                 t.valid ? t.period : 0, r.valid ? r.period : 0,
+                 t.valid ? t.multiplier : 0, r.valid ? r.multiplier : 0,
+                 t.valid ? t.source : -1, r.valid ? r.source : -1,
+                 t.valid ? t.periodF : 0.0f, r.valid ? r.periodF : 0.0f,
+                 t.valid ? t.accentBin : 0.0f, r.valid ? r.accentBin : 0.0f,
+                 t.valid ? t.snapTargetPhase : 0.0f, r.valid ? r.targetPhase : 0.0f,
+                 t.strength, r.strength);
+}
+}  // namespace AcfTraceDump
+static const char* g_acfTrace = nullptr;
+
 // Shared onset gate overrides (negative = keep the firmware default).
 static double g_onsetPatternBias = -1.0;
 static double g_onsetMaxFrames = -1.0;
@@ -183,6 +208,10 @@ int main(int rawArgc, char** rawArgv) {
             }
             if (std::strncmp(a, "--frame-features=", 17) == 0) {
                 g_frameFeatures = eq + 1;
+                continue;
+            }
+            if (std::strncmp(a, "--acf-trace=", 12) == 0) {
+                g_acfTrace = eq + 1;
                 continue;
             }
             const double v = std::atof(eq + 1);
@@ -269,6 +298,19 @@ int main(int rawArgc, char** rawArgv) {
         tracker.setFrameHook(FrameDump::hook, nullptr);
     }
 
+    if (g_acfTrace) {
+        AcfTraceDump::out = std::fopen(g_acfTrace, "w");
+        if (!AcfTraceDump::out) {
+            std::fprintf(stderr, "cannot open %s\n", g_acfTrace);
+            return 2;
+        }
+        std::fprintf(AcfTraceDump::out, "snap_frame,apply_frame,new_valid,ref_valid,new_period,ref_period,"
+                     "new_mult,ref_mult,new_src,ref_src,new_period_f,ref_period_f,new_accent,ref_accent,"
+                     "new_phase,ref_phase,new_strength,ref_strength\n");
+        AcfTraceDump::tracker = &tracker;
+        tracker.setAcfTraceHook(AcfTraceDump::hook, nullptr);
+    }
+
     std::mt19937 rng(seed);
     std::normal_distribution<double> nd(0.0, 1.0);
     const double meanPeriodUs = 1e6 / loopFps;
@@ -308,6 +350,7 @@ int main(int rawArgc, char** rawArgv) {
     }
     std::fclose(out);
     if (FrameDump::out) std::fclose(FrameDump::out);
+    if (AcfTraceDump::out) std::fclose(AcfTraceDump::out);
     if (costModel) {
         const double secs = time.us / 1e6;
         std::fprintf(stderr, "[COST] loops=%llu sim_s=%.1f fps=%.1f nn_per_s=%.1f nn_cpu=%.0f%%\n",

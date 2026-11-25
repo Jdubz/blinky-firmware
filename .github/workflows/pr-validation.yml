@@ -48,7 +48,7 @@ jobs:
         # SharedSpectralAnalysis, AdaptiveMic, BlinkyAssert), their scripts, the TFLite pin
         # the NN harness builds against, the corpus they replay (and .gitmodules, which decides
         # what its checkout fetches), and this workflow.
-        audio='^(blinky-things/audio/|blinky-things/hal/|blinky-things/inputs/AdaptiveMic\.|blinky-things/types/BlinkyAssert\.|blinky-simulator/include/|tests/tracker/|tools/setup_tflite_lib\.sh$|tools/firmware_toolchain\.json$|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
+        audio='^(blinky-things/audio/|blinky-things/hal/|blinky-things/inputs/AdaptiveMic\.|blinky-things/types/BlinkyAssert\.|blinky-simulator/include/|tests/tracker/|tests/unit/test_sliding_acf\.cpp$|tools/setup_tflite_lib\.sh$|tools/firmware_toolchain\.json$|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
         if grep -qE "$audio" changed.txt; then
           echo "audio=true" >> "$GITHUB_OUTPUT"
           echo "audio pipeline or harness changed: the tracker harnesses run"
@@ -381,6 +381,21 @@ jobs:
         g++ $FLAGS -O1 -g -fsanitize=undefined,float-cast-overflow,float-divide-by-zero \
           -fno-sanitize-recover=all $SRCS -o build/tracker_harness_ubsan
         g++ $FLAGS -O2 $SRCS -o build/tracker_harness
+
+    # The incremental ACF tables (blinky-things/audio/SlidingAcf.h) against a from-scratch
+    # sum (exact, bit for bit, through filling, wrapping and held updates) and against the
+    # old float batch ACF (at least as accurate).
+    - name: Incremental ACF exactness (UBSan)
+      run: |
+        g++ -std=c++17 -Wall -Wextra -Werror -O1 -g -fsanitize=undefined,float-cast-overflow,float-divide-by-zero \
+          -fno-sanitize-recover=all -Iblinky-things tests/unit/test_sliding_acf.cpp -o build/test_sliding_acf
+        build/test_sliding_acf
+
+    # Every tempo decision on edm/ (incremental tables, spread over the acfPeriodMs cycle)
+    # must equal the old batch runAcf's on the same snapshot (tests/tracker/acf_reference.h):
+    # same period, multiplier and source, periodF within 1e-3 frames, phase within 1e-4.
+    - name: Tempo decisions equal the batch ACF (edm/)
+      run: python tests/tracker/acf_equivalence.py --harness build/tracker_harness
 
     - name: Onset STFT matches a numpy SuperFlux (#178)
       run: TRACKER_HARNESS=build/tracker_harness python -m pytest -q tests/tracker/test_onset_stft.py
