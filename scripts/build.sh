@@ -162,7 +162,9 @@ else
     mkdir -p "$OUTPUT_DIR"
     COMPILE_LOG="$OUTPUT_DIR/compile.log"
     if ! "$ARDUINO_CLI" "${COMPILE_ARGS[@]}" --verbose blinky-things > "$COMPILE_LOG" 2>&1; then
-        grep -E "error|Error" "$COMPILE_LOG" | head -40 >&2
+        # No pipe: under pipefail, `| head` SIGPIPEs grep (exit 141) and a log with no
+        # "error" line makes grep exit 1; either way the script died before saying why.
+        grep -m 40 -E "error|Error" "$COMPILE_LOG" >&2 || true
         echo "Compilation failed (full log: $COMPILE_LOG)" >&2
         exit 1
     fi
