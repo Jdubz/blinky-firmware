@@ -143,4 +143,4 @@ A library resolved outside `.arduino/`, or the core is unpatched. Re-run `bash s
 Install the version pinned in `tools/firmware_toolchain.json` (`arduino_cli`).
 
 ### Port locked / device not found
-blinky-server, the MCP server or blinky-console may have the port open. blinky-server owns all serial and BLE connections on blinkyhost; on a workstation, close other serial sessions first.
+blinky-server, the MCP server or blinky-console may have the port open. blinky-server owns all serial and BLE connections on the machine it runs on (the fleet server, the test box); on a workstation, close other serial sessions first.

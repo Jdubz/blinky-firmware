@@ -2,7 +2,7 @@
 
 > **Where things live (blinky_time#357).** The firmware side (signed OTA in `blinky-things/ota/`, signing, what a stable release is) is this repo's. The release mirror the console serves is built by blinky_time's own copy of `firmware_release.py mirror` (`blinky-server/hosttools/`, through the GitHub API, no firmware checkout); `tools/firmware_release.py mirror` here produces the same output, for local use. The page, its checks, the console deploy (`blinky-console/`, `.github/workflows/blinky-console-deploy.yml`) and `scripts/deploy.sh` are [blinky_time](https://github.com/Jdubz/blinky_time)'s; paths below under those names are in that repo.
 
-Lets anyone with a blinky device update it to a **stable release** from a browser: no blinkyhost, no blinky-server, no repo checkout, one device per update. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
+Lets anyone with a blinky device update it to a **stable release** from a browser: no fleet server, no blinky-server, no repo checkout, one device per update. Personal devices run exactly the fleet's firmware. There is no separate build, so a personal device joins the fleet like any other when it's in range of a blinky network (see [Fleet interplay](#fleet-interplay)).
 
 > **Status (2026-10-21): live, USB only, since blinky_time PR #266.** The Firebase deploy builds with `VITE_FIRMWARE_UPDATES=on` (`.github/workflows/blinky-console-deploy.yml`), which turns on `FIRMWARE_UPDATES_ENABLED` (`blinky-console/src/MainShell.tsx`). To hide the page again, remove that env line and redeploy. Bluetooth is built but hidden (`BLE_UPDATES_ENABLED = false` in `FirmwarePage.tsx`). A person updated a device end to end (`b211-dev` → b215) on 2026-10-20. The owner turned it on with checklist item 2 open and item 4 parked; recovery over USB on Windows is still limited (see [Recovery](#recovery)). `blinkytime.joshwentworth.com` (no hyphen) redirects here.
 
@@ -125,7 +125,7 @@ The page went live (USB) on 2026-10-21 (blinky_time PR #266), after item 1 and a
 - **Bluetooth from Windows Chrome:** slow GATT operations and a failed write (bench results). The self-restart was blinky_time#173 (fixed: MTU-sized stack overflow on long replies); NUS commands now also run on the loop task. Still to do: reproduce a full update on Android Chrome, and check the scanner duty cycle (`BleScanner`, window 144 of 160) against connection events.
 - **Authenticated console commands:** `bootloader ble`, `device upload`, `wipe_device_identity` etc. are accepted from any NUS central or broadcaster. Signing the update path doesn't cover them.
 - **Power loss during the bootloader's copy:** the apply request is one-shot (RAM/`GPREGRET`). A power cut mid-copy leaves the device in its bootloader, which is recoverable but not self-healing. Fix: a persistent "copy pending" marker in the bootloader.
-- **Hub-driven updates** (blinkyhost offering the stable release to personal devices in range) are deferred by decision.
+- **Hub-driven updates** (the fleet server offering the stable release to personal devices in range) are deferred by decision.
 
 ## Fleet interplay
 

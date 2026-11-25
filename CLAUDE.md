@@ -43,7 +43,7 @@ The flow:
 
 **Bare-chip recovery only:** `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` (use when a device is bricked and not yet enrolled in the fleet).
 
-**Device on THIS machine's USB (not blinkyhost's):** `python tools/deploy_local.py --port COM4 --device-id <id>`. It carries deploy.sh's gates locally:
+**Device on THIS machine's USB (not the fleet server's):** `python tools/deploy_local.py --port COM4 --device-id <id>`. It carries deploy.sh's gates locally:
 - **Explicit target:** `json info` `device.id` must match `--device-id`.
 - **Pre-flight:** the device must be configured, with ≥ 75 s uptime if its `json info` reports `resetReason` (its reboot counter counts only fault resets), else ≥ 5 min 15 s (older firmware counts every boot until 5 min of uptime).
 - **Firmware:** the latest stable release by default (downloaded, sha256-verified). `--release bN` selects a specific release, and `--dev` a local build of a clean tree (test devices only). Then the server's hex/UF2 validators run.
@@ -77,7 +77,7 @@ blinky-server owns all serial/BLE connections on its host — no port contention
 
 **SWD recovery on the test box (XIAO Debug Mate).** Test chips in the box sit on a Seeed XIAO Debug Mate (CMSIS-DAP, OpenOCD). Use `./scripts/swd_recover.sh probe` then `restore` (CTRL-AP erase → MBR + S140 + fleet BL + UICR + stable app + valid settings page, verified). The Debug Mate has no working reset line (SYSRESETREQ only), pyOCD can't open it (empty USB serial), and two OpenOCD sessions on it wedge the probe. With no valid app the fleet BL sits stably in DFU (verified 2026-11-21; an earlier "reset loop" was a failing board), and blinky-server recovers such a chip over USB on its own (blinky_time#378/#379); restore still includes an app so the chip comes back running firmware. A real cold boot needs both hub ports cut (the XIAO's and the Debug Mate's): the SWD lines can keep a halted chip powered. See `docs/SWD_RECOVERY.md`.
 
-**SWD is a test-box tool only.** The swd-flash.local Pi was retired (2026-11-23); the Debug Mate above is the only SWD path. A fleet device off the box needs physical access to a Debug Mate. A chip with a valid-but-crashy app keeps resetting from its hardware watchdog (`SafeBootWatchdog`), which SYSRESETREQ can't stop, so never try a surgical SWD erase: mass-erase through CTRL-AP (no halt needed) and do a full restore, which is what `swd_recover.sh restore` does.
+**SWD is a test-box tool only.** The old SWD Pi was retired (2026-11-23); the Debug Mate above is the only SWD path. A fleet device off the box needs physical access to a Debug Mate. A chip with a valid-but-crashy app keeps resetting from its hardware watchdog (`SafeBootWatchdog`), which SYSRESETREQ can't stop, so never try a surgical SWD erase: mass-erase through CTRL-AP (no halt needed) and do a full restore, which is what `swd_recover.sh restore` does.
 
 **Test bootloaders on a SACRIFICIAL device.** Do not flash an experimental BL to the only available test device. If only one device is on the bench, build the BL change against the known-good (`git log blinky-local-patches` to find the last-stable BL commit) and verify with `scripts/verify_bootloader.py` BEFORE flashing. The verifier catches the specific bug class that bricked the hat; pass it before committing to a flash.
 
@@ -200,6 +200,10 @@ Devices get firmware through blinky_time's `./scripts/deploy.sh` (fleet, stable 
 Reviews and analysis must focus on **outstanding actions**, not documenting past work.
 
 **Issue numbers:** this repo's issues started at #1 in the 2026-11-04 split. In docs and code comments, a bare number of 100 or more (#155, #280, PR #347, ...) is a blinky_time issue or PR from before the split. Firmware issues that moved got new numbers here (e.g. #340 → #8, #178 → #20).
+
+## No network topology (the repo is public)
+
+No host names, private or tailnet addresses, or mDNS names, in code, docs or tests. Name machines by role (the fleet server, the test box, the build host); examples use `192.0.2.x` and `example.invalid`. Host endpoints live in `~/.config/blinky/hosts.env` (dir 700, file 600; `BLINKY_TESTBOX_URL` is the test box's blinky-server, the other keys are listed in blinky_time's CLAUDE.md). `scripts/check_topology.py` runs in the Documentation Check job; a justified exception goes in `.topology-allowlist` with its reason.
 
 ## Documentation Index
 

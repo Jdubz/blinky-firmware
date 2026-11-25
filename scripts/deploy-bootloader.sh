@@ -135,7 +135,7 @@ find_automount() {
     return 1
 }
 
-# Headless case (e.g. blinkyhost): no desktop session, so udisks never
+# Headless case (e.g. the fleet server): no desktop session, so udisks never
 # auto-mounts. Find the DFU block device by label and mount it ourselves
 # with the invoking uid (mirrors tools/uf2_upload.py). Echoes the mountpoint
 # on success; the caller records it in WE_MOUNTED so it gets unmounted later.
