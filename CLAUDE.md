@@ -8,8 +8,9 @@ This file contains **critical behavior rules only** for the firmware (nRF52840, 
 
 - **Releases and staging builds are the contract.** blinky-server, `deploy.sh` and the web flasher consume this repo's GitHub releases (`bN`: hex, uf2, bin, otam, `manifest.json`, gate records) and staging artifacts (`staging-firmware-<sha>`). Don't change the manifest or asset names without a matching blinky_time PR.
 - **Wire protocols** (`json info` fields, `comms/BleProtocol.h`, `comms/RecordStream.h`, `ota/`) are mirrored in blinky-server and blinky-console. A protocol change is a PR here plus a PR there.
-- **blinky_time pins this repo** as its `firmware/` submodule, and runs these `tools/` (release client, hex/UF2 validators, test-device list). A change to them reaches the server only through a submodule bump there.
-- **Model headers** (`blinky-things/audio/*_model_data.h`) come from blinky_time's ml-training. Shipping a model is a PR here.
+- **blinky_time has no copy of this repo** (2026-11-24: the repos are completely decoupled, no submodule and no source dependency). blinky-server runs its own host tools (`blinky-server/hosttools/`, vendored from this repo's `tools/` at `33e0059`): a fix to a tool here doesn't reach the server, and one the server needs is a PR there too. The mel front end contract (`tests/parity/spec/`) is the one set of files both repos carry, identically.
+- **Service links stay:** the box's staging runner posts `Hardware test (staging)` here and opens the promotion PRs; `tools/release_promote.py` dispatches blinky_time's console deploy workflow; `tools/uf2_upload.py` asks blinky-server's HTTP API to release and reconnect a port.
+- **Model headers** (`blinky-things/audio/*_model_data.h`) come from blinky_time's ml-training, whose export writes them into its own run output. Shipping a model is a PR here that copies the header in; `tools/check_model_input.py` checks it.
 - **The corpus** is the `corpus/` submodule. Label or scoring changes are a PR to blinky-corpus, then a bump here.
 
 ## CRITICAL: Upload Safety (nRF52840)
