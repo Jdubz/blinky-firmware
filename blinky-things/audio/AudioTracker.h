@@ -137,6 +137,14 @@ public:
     float getBpmMax() const { return bpmMax; }
     uint32_t getLastAcfMs() const { return lastAcfDurationMs_; }
     uint32_t getLastPlpMs() const { return lastPlpMs_; }
+    // ACF (runAcf) and PLP (updatePlpAnalysis) cost per run, mean and max in us over the last
+    // closed 5 s window (0 until one closes), like SharedSpectralAnalysis's onsetUs. They run
+    // inline in processFrame every acfPeriodMs, so a long one stretches that loop iteration and
+    // delays any onset drawn in it: `json info` reports them next to maxFrameMs.
+    uint32_t getAcfUs() const { return acfCost_.mean; }
+    uint32_t getAcfMaxUs() const { return acfCost_.maxClosed; }
+    uint32_t getPlpUs() const { return plpCost_.mean; }
+    uint32_t getPlpMaxUs() const { return plpCost_.maxClosed; }
 
     // Alias for JSON audio stream ("onset" field)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
@@ -407,6 +415,28 @@ private:
     // === ACF timing ===
     uint32_t lastAcfDurationMs_ = 0;  // Timing: last runAcf()+updatePlpAnalysis() duration
     uint32_t lastPlpMs_ = 0;       // Timing: last updatePlpAnalysis() duration
+
+    // Mean and max of a recurring cost (us) over windows of COST_WINDOW_MS; the getters read
+    // the last closed window, so a read is stable within one.
+    static constexpr uint32_t COST_WINDOW_MS = 5000;
+    struct CostWindow {
+        uint32_t sum = 0, count = 0, max = 0;   // the open window
+        uint32_t mean = 0, maxClosed = 0;       // the last closed window
+        uint32_t startMs = 0;
+        void add(uint32_t us, uint32_t nowMs) {
+            sum += us;
+            count++;
+            if (us > max) max = us;
+            if (nowMs - startMs >= COST_WINDOW_MS) {
+                mean = sum / count;   // count >= 1: this add just counted
+                maxClosed = max;
+                sum = count = max = 0;
+                startMs = nowMs;
+            }
+        }
+    };
+    CostWindow acfCost_;
+    CostWindow plpCost_;
 
 
     // === Pattern slot cache (v82) ===
