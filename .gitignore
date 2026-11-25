@@ -56,3 +56,9 @@ scratch/
 /build/
 /reports/
 /research_notes/
+
+# Private host config lives in ~/.config/blinky/, never in a repo (scripts/check_topology.py).
+hosts.env
+observability.env
+build.env
+spark.env

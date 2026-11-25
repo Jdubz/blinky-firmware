@@ -36,18 +36,21 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness
 Run these against test devices, not installed fleet devices.
 
 ```bash
+# BLINKY_TESTBOX_URL is the test box's blinky-server, from ~/.config/blinky/hosts.env
+# (read just that key, never source the file:
+#  BLINKY_TESTBOX_URL="$(sed -n 's/^BLINKY_TESTBOX_URL=//p' ~/.config/blinky/hosts.env | tail -n 1)")
 # Run validation suite (all tracks, single device)
-curl -X POST http://blinkyhost.local:8420/api/test/validate \
+curl -X POST "$BLINKY_TESTBOX_URL/api/test/validate" \
   -H 'Content-Type: application/json' \
   -d '{"device_ids": ["DEVICE_ID"], "track_dir": "/path/to/corpus/edm"}'
 
 # Parameter sweep (3 devices, 3 values)
-curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
+curl -X POST "$BLINKY_TESTBOX_URL/api/test/param-sweep" \
   -H 'Content-Type: application/json' \
   -d '{"device_ids": ["D1","D2","D3"], "param_name": "fluxdelta", "values": [6, 8, 10], "track_dir": "/path/to/corpus/edm"}'
 
 # Poll for results
-curl http://blinkyhost.local:8420/api/test/jobs/{job_id}
+curl "$BLINKY_TESTBOX_URL/api/test/jobs/{job_id}"
 ```
 
 ### Run Tests via MCP

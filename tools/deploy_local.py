@@ -2,7 +2,7 @@
 """
 deploy_local.py - deploy firmware to ONE USB-attached nRF52840 with the same
 safety gates as scripts/deploy.sh + blinky-server, for when the device is on
-this machine's USB instead of blinkyhost's (e.g. a Windows workstation).
+this machine's USB instead of the fleet server's (e.g. a Windows workstation).
 
 Pipeline (fails loud at every step, exit codes match deploy.sh):
   1. Pre-flight (read-only, over CDC):
