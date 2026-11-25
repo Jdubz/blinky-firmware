@@ -70,6 +70,7 @@ bool RenderPipeline::begin(const DeviceConfig& config, ILedStrip& leds, LEDMappe
     if (!renderer_) {
         return false;
     }
+    ledBrightness_.begin(&leds);
 
     // Set defaults: Fire generator, no effect
     currentGenerator_ = fire_;

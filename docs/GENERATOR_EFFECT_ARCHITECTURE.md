@@ -86,6 +86,21 @@ Generator class names have no `Generator` suffix (`Fire`, not `FireGenerator`). 
 
 A flash edge is stamped right after `show()` queues the frame. The LEDs latch it after the DMA, `latchUs` later: the pixels per strand × 30 µs (2 ms for 64 LEDs on one strand; `ledPin2` splits them across two strands sent at once). A flash stays lit for at least `ON_MS` from its stamped hand-off. The host puts edges on its own clock with the serial clock sync (`millis` offset).
 
+### LED brightness override (test box)
+
+`leds` overrides the LED strip's brightness at runtime, for the test box: its chip's device config (`testbox_grid_v1`) has brightness 0, so it boots and idles dark, and blinky-server lights it only while a test runs (blinky_time `docs/TEST_BOX.md`). The device config's `brightness` stays the default, applied at boot as before; nothing changes until a `leds` command arrives, and blinky-server sends it only to the box's chips (a `--staging` server). Runtime only: never saved, and `leds config` or a reboot returns to the device config's brightness. Code: `render/LedBrightness.h`.
+
+| Command | Does |
+|---|---|
+| `leds` or `leds status` | reports, changes nothing |
+| `leds 0`..`leds 255` | overrides the brightness |
+| `leds off` | `leds 0` |
+| `leds config` | drops the override: the stored device config's brightness (what a reboot would apply) |
+
+Every reply is one JSON line, `{"brightness":40,"config":0,"override":true}` (`brightness` is what the strip applies now, `config` the stored device config's), or an `ERROR:` line: a bad argument (refused, never clamped), or no device config / render pipeline (safe mode). `json info` carries `"ledBrightness"` and `"ledOverride"` when a render pipeline runs. Firmware without the command answers `Unknown command`.
+
+The override goes through `ILedStrip::setBrightness`, applied as each pixel is written: the generators, the renderer, `show()` and the LED DMA run exactly as they do lit (`Nrf52PwmLedStrip` converts and sends every byte whatever its value), so frame timing measured dark is frame timing lit.
+
 ## Base Interfaces
 
 ### Generator Interface (`generators/Generator.h`)

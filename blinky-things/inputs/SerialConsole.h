@@ -280,6 +280,7 @@ private:
     bool handleBatteryCommand(const char* cmd);
     bool handleStreamCommand(const char* cmd);
     bool handleTestCommand(const char* cmd);
+    bool handleLedsCommand(const char* cmd);      // runtime LED brightness override (test box)
     bool handleAudioStatusCommand(const char* cmd);
     bool handleModeCommand(const char* cmd);
     bool handleConfigCommand(const char* cmd);

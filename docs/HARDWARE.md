@@ -55,6 +55,7 @@ The test box chip (a XIAO nRF52840 Sense Plus, 87DE9B58C90AFE2D; device config `
 - The grid runs from its own external 5 V supply, not from the XIAO or the Debug Mate.
 - 3.3 V data drives this grid directly; no level shifter is needed.
 - Wiring order, seen from the front: data enters at the bottom-right LED; each row runs right to left, rows go bottom to top, no serpentine. That is orientation 5, `HORIZONTAL_ROTATED_180` (#46): `HORIZONTAL` (orientation 0) rotated 180°.
+- Its device config has brightness 0: the grid is dark at boot and while idle. blinky-server lights it with the runtime `leds` override only while a test runs (`docs/GENERATOR_EFFECT_ARCHITECTURE.md`, "LED brightness override"; blinky_time `docs/TEST_BOX.md`).
 
 ### Power Requirements
 - **LED Current**: ~60mA per LED at full brightness

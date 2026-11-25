@@ -14,6 +14,7 @@
 #include "EffectRenderer.h"
 #include "FrameMetrics.h"
 #include "TestPattern.h"
+#include "LedBrightness.h"
 
 /**
  * EffectType - Enumeration of available post-processing effects
@@ -99,6 +100,10 @@ public:
     // and effect; the renderer and LED mapper still run. Runtime only, never saved.
     TestPattern& testPattern() { return testPattern_; }
 
+    // The test box's runtime brightness override (LedBrightness.h, the `leds` command).
+    // Runtime only, never saved.
+    LedBrightness& ledBrightness() { return ledBrightness_; }
+
     // List available options (returns count)
     static constexpr int NUM_GENERATORS = 4;
     static constexpr int NUM_EFFECTS = 2;  // Including NONE
@@ -109,6 +114,7 @@ public:
 
 private:
     TestPattern testPattern_;
+    LedBrightness ledBrightness_;
     // Generators (all owned, one active)
     Fire* fire_;
     Water* water_;
