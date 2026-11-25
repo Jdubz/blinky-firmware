@@ -5,7 +5,7 @@
 
 #define MQTT_USERNAME     "your_mqtt_username"
 #define MQTT_PASSWORD     "your_mqtt_password"
-#define MQTT_SERVER       "192.168.1.100"
+#define MQTT_SERVER       "192.0.2.100"
 #define MQTT_SERVER_PORT  1883
 
 #define DEFAULT_SSID "your_wifi_ssid"

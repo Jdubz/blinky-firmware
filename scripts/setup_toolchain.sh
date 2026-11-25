@@ -3,7 +3,7 @@
 #
 #   bash scripts/setup_toolchain.sh
 #
-# Every machine that builds firmware (workstations, blinkyhost, CI, the
+# Every machine that builds firmware (workstations, the fleet server, CI, the
 # release workflow) runs this, so every build resolves exactly the same core
 # and libraries: tools/firmware_toolchain.json, TFLite pinned in
 # tools/setup_tflite_lib.sh, the core patches in patches/. scripts/build.sh

@@ -29,7 +29,7 @@ Channels and the release flow: [RELEASE_PROCESS.md](RELEASE_PROCESS.md). Don't d
 
 ### Recovery (nRF52840 bricked by DFU upload)
 
-Test chips on the test box recover over SWD through their XIAO Debug Mate: `scripts/swd_recover.sh probe`, then `restore` (see [SWD_RECOVERY.md](SWD_RECOVERY.md)). That is the only SWD path (the swd-flash.local Pi was retired 2026-11-23). A fleet device off the box can be recovered over SWD only with physical access to a Debug Mate. Use it as the last resort when a device drops off USB and isn't reachable via BLE.
+Test chips on the test box recover over SWD through their XIAO Debug Mate: `scripts/swd_recover.sh probe`, then `restore` (see [SWD_RECOVERY.md](SWD_RECOVERY.md)). That is the only SWD path (the old SWD Pi was retired 2026-11-23). A fleet device off the box can be recovered over SWD only with physical access to a Debug Mate. Use it as the last resort when a device drops off USB and isn't reachable via BLE.
 
 ### Unresponsive Device Runbook
 

@@ -92,13 +92,15 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 python tools/device_eval.py --port COM3                       # whole corpus, ~13 min
 python tools/device_eval.py --port COM3 --tracks trance-party --commands "set fluxdelta 10"
 
-# On device: validation suite via the server API (bench test devices only)
-curl -X POST http://blinkyhost.local:8420/api/test/validate \
+# On device: validation suite via the test box's server API (test chips only)
+# BLINKY_TESTBOX_URL is the test box's blinky-server, from ~/.config/blinky/hosts.env
+# (load it with: set -a; . ~/.config/blinky/hosts.env; set +a)
+curl -X POST "$BLINKY_TESTBOX_URL/api/test/validate" \
   -H 'Content-Type: application/json' \
   -d '{"device_ids": ["DEVICE_ID"], "track_dir": "/path/to/corpus/edm"}'
 
 # On device: parameter sweep via the server API
-curl -X POST http://blinkyhost.local:8420/api/test/param-sweep \
+curl -X POST "$BLINKY_TESTBOX_URL/api/test/param-sweep" \
   -H 'Content-Type: application/json' \
   -d '{"device_ids": ["D1"], "param_name": "fluxdelta", "values": [6, 8, 10], "track_dir": "/path/to/corpus/edm"}'
 
@@ -222,7 +224,7 @@ The harness, `tools/device_eval.py` and the server's `/api/test/validate` all sc
 
 Their numbers are directly comparable. The harness's `recall` column is a separate, older metric: strong onsets (≥ 0.8) within ±50 ms.
 
-**Segments, not whole tracks.** On a device, each track plays from its `track_manifest.json` `seekOffset` for 35 s, and its ground truth is cut to that segment (`segment_ground_truth`). Before 2026-10-21 the server scored those runs against the track's first 35 s. 12 of the 18 tracks have a non-zero seek, so **on-device F1 from blinkyhost before then is chance-level on those tracks; don't compare against it.**
+**Segments, not whole tracks.** On a device, each track plays from its `track_manifest.json` `seekOffset` for 35 s, and its ground truth is cut to that segment (`segment_ground_truth`). Before 2026-10-21 the server scored those runs against the track's first 35 s. 12 of the 18 tracks have a non-zero seek, so **on-device F1 from the fleet server before then is chance-level on those tracks; don't compare against it.**
 
 **Timing in `device_eval.py`.** Each segment is preceded by three sync clicks at irregular spacing. The device's onsets on the clicks measure that run's lag: playback start, speaker and detection delay together. Two cheaper approaches fail on the bench:
 - **The ffplay process start as audio start:** its delay depended on the seek position (165 ms vs 390 ms).
