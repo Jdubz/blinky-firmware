@@ -3,8 +3,11 @@
 firmware_release.py - shared firmware release logic (docs/RELEASE_PROCESS.md).
 
 Used by .github/workflows/release.yml (package), tools/release_gate.py,
-tools/release_promote.py, tools/deploy_local.py and scripts/deploy.sh
-(download a verified release), so every path agrees on what a release is.
+tools/release_promote.py and tools/deploy_local.py (download a verified
+release), so every path here agrees on what a release is. blinky-server and
+blinky_time's scripts/deploy.sh run blinky_time's own copy
+(blinky-server/hosttools/firmware_release.py); the release assets and
+manifest are the contract between them.
 
 A release is a GitHub Release tagged `b<N>` whose assets are:
   blinky-things-b<N>.hex, blinky-things-b<N>.uf2, manifest.json, and, once

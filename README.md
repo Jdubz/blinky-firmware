@@ -10,7 +10,7 @@ Firmware for blinky's audio-reactive LED fixtures (XIAO nRF52840 Sense), and its
 - `corpus/`: [blinky-corpus](https://github.com/Jdubz/blinky-corpus), the validation corpus and its scorers (submodule).
 - `archive/`: sketches from before `blinky-things` (2017–2025), kept for reference; not built (see [SECURITY.md](SECURITY.md)).
 
-The fleet server, web console, ML training and the test box live in [blinky_time](https://github.com/Jdubz/blinky_time). That repo pins this one as its `firmware/` submodule.
+The fleet server, web console, ML training and the test box live in [blinky_time](https://github.com/Jdubz/blinky_time). That repo has no copy of this one: it consumes its releases and staging artifacts (with their manifest), and the two share only the mel front end contract (`tests/parity/spec/`) and service APIs.
 
 ## Flow
 

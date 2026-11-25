@@ -4,8 +4,9 @@
 Usage: sudo usb_reset.py /dev/bus/usb/BBB/DDD
 
 Sends the standard Linux USBDEVFS_RESET ioctl to reinitialize a USB device
-without a power-cycle. Used by blinky-server to clear TinyUSB CDC state
-after closing a serial connection.
+without a power-cycle, to clear TinyUSB CDC state after closing a serial
+connection. blinky-server runs its own copy (blinky_time's
+blinky-server/hosttools/usb_reset.py); this one is for bench use.
 
 Intended to be run via sudoers with a narrow rule:
     blinkytime ALL=(ALL) NOPASSWD: /path/to/usb_reset.py

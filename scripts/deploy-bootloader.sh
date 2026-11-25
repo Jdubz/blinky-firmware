@@ -46,7 +46,7 @@ ERROR: BL_REPO is missing or not populated: $BL_REPO
 
 The bootloader-source verifier (scripts/verify_bootloader.py) needs the
 Adafruit_nRF52_Bootloader source tree to run its source-level invariant
-checks. The blinky_time repo ships this source as a submodule at
+checks. This repo ships that source as a submodule at
 bootloader/src; if the directory is empty you probably need to init it:
 
       git -C "$REPO" submodule update --init --recursive bootloader/src
