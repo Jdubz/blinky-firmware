@@ -55,7 +55,8 @@ python tests/tracker/run_tracker_eval.py --harness build/tracker_harness \
 - **Corpus:** `corpus/edm/` (the validation corpus).
 - **Ground truth:** `.onsets_consensus.json`, and for the drum metrics `kick_weighted/<track>.kick_weighted.json`, cleaned (kept only where a consensus onset backed by ≥ 2 systems lies within 70 ms).
 - **Decoding:** needs `ffmpeg` on PATH or `pip install imageio-ffmpeg`.
-- **A/B in CI (#8):** `gh workflow run tracker-ab.yml -f opts="--onset-pattern-bias=0"` runs the corpus with the same binary twice, defaults (`old`) and the given options (`new`), and puts both summaries in the run's step summary. It gates nothing; it is for measuring one suspect at a time.
+- **A/B in CI (#8):** `gh workflow run tracker-ab.yml -f opts="--onset-pattern-bias=0"` runs the corpus with the same binary twice, defaults (`old`) and the given options (`new`), and puts both summaries in the run's step summary. It gates nothing; it is for measuring one suspect at a time. With `-f base=<ref>` (and `--ref <branch>`), `old` is the harness built from that ref instead, so a firmware change is measured before/after on the branch's corpus pin for both sides.
+- **Tempo decision equivalence:** `--acf-trace=PATH` logs every tempo decision next to the old batch ACF's on the same snapshot (`acf_reference.h`, a test-only copy of `runAcf` before the incremental tables); `python tests/tracker/acf_equivalence.py --harness build/tracker_harness` runs it over edm/ and fails on any difference in period, multiplier or source. CI runs it. Remove both when a tempo change (phase 2) makes the decisions differ on purpose.
 - **Studies in CI (#8):** `gh workflow run tracker-study.yml -f study=pattern_bias` runs `tests/tracker/<study>_study.py`, and the results go in the log, the step summary and the `study` artifact. `pattern_bias_study.py` lists the hits the rhythm-pattern bias suppresses (they fire with it off, not with it on). For each it records the drum label, whether it breaks a repeat, the tracker's local lock, and whether it is a timing near-miss. `frame_phase_study.py` (#20) shifts each track by 0–224 samples in steps of 32 (one 256-sample frame), so only where each hit lands inside its spectral frame changes. It counts the kicks and snares that fire in every shift, in none, or only in some (phase-sensitive), the flash-strength wobble across shifts, and how many repeat inconsistencies involve a phase-sensitive hit.
 
 ### Metrics
@@ -98,7 +99,7 @@ Compare the same track across `--fps` values: the numbers should barely move.
 
 ## CI
 
-The `tracker-harness` job in `.github/workflows/pr-validation.yml` runs on every PR. It does three things:
+The `tracker-harness` job in `.github/workflows/pr-validation.yml` runs on every PR that touches the audio pipeline or the harness. Besides the incremental-ACF unit test (`tests/unit/test_sliding_acf.cpp`) and the tempo decision equivalence above, it does three things:
 
 - **UBSan stress:** builds the harness with `-fsanitize=undefined,float-cast-overflow,float-divide-by-zero -fno-sanitize-recover=all` and runs `run_stress.py`. That covers synthetic silence, an 8 s gap, clipping, white noise, 50 Hz hum and 128 BPM clicks, each at 15, 60 and 250 loop fps. Any UB, crash, firmware `BLINKY_ASSERT` after `begin()` (the harness exits 3), empty output or non-finite phase/bpm fails the job. The corpus gate uses the same harness, so a tripped assert fails it too. It also checks the level normalizer on a smooth noise riser: `level` must not stay pinned at 1.0 for 2 s or more (#176).
 - **Frame-rate gate:** runs the release build with the CPU cost model below (NN off, as on devices) and fails if the simulated frame rate is under 150 fps.

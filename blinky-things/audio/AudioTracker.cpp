@@ -275,6 +275,7 @@ void AudioTracker::processFrame(bool mayRunExpensive, float elapsedFrames) {
     bassContrast = clampf(bassContrast, 0.0f, 1.0f);
 
     addOssSample(bassContrast);
+    pushRhythmSample(0, bassContrast);
 
     // Bass energy (PLP dual-source AND energy synthesis). Mel bands 0-5
     // cover the bass region (mel band indices, not FFT bins).
@@ -283,6 +284,7 @@ void AudioTracker::processFrame(bool mayRunExpensive, float elapsedFrames) {
     for (int i = 0; i <= 5; i++) cachedBassEnergy_ += mel[i];
     cachedBassEnergy_ /= 6.0f;
     addBassSample(cachedBassEnergy_);
+    pushRhythmSample(1, cachedBassEnergy_);
 
     // Tempo/phase source 2 is the mic level in BOTH modes, never the NN
     // activation. The NN fires on every percussive hit, off-beat hats
@@ -291,6 +293,7 @@ void AudioTracker::processFrame(bool mayRunExpensive, float elapsedFrames) {
     // onset detection (pickOnset); tempo tracking stays on the
     // signals it was tuned on.
     nnOnsetBuffer_[nnWriteIdx_] = mic_.getLevel();
+    pushRhythmSample(2, nnOnsetBuffer_[nnWriteIdx_]);
     nnWriteIdx_ = (nnWriteIdx_ + 1) % NN_BUFFER_SIZE;
     if (nnCount_ < NN_BUFFER_SIZE) nnCount_++;
 
@@ -300,22 +303,37 @@ void AudioTracker::processFrame(bool mayRunExpensive, float elapsedFrames) {
 
     // --- ACF period detection + PLP pattern analysis, cadence in frames ---
     // Warmup: 100 frames (1.6 s); ACF_MAX_LAG (80) is the hard minimum.
+    // A decision starts every acfPeriodFrames and is spread over that cycle
+    // (runAcfJob), so no single frame carries the whole analysis.
+    const uint32_t tSlice = time_.micros();
+    if (acfJobActive_) acfJobPhaseFrames_ += elapsedFrames;
     framesSinceAcf_++;
     int acfPeriodFrames = static_cast<int>(acfPeriodMs * OSS_FRAME_RATE / 1000.0f + 0.5f);
     if (acfPeriodFrames < 1) acfPeriodFrames = 1;
-    if (framesSinceAcf_ >= acfPeriodFrames && ossCount_ >= 100) {
+    const bool startDecision = framesSinceAcf_ >= acfPeriodFrames && ossCount_ >= 100;
+    if (startDecision) {
         framesSinceAcf_ = 0;
-        const uint32_t t0 = time_.micros();
-        runAcf();
-        const uint32_t t1 = time_.micros();
-        updatePlpAnalysis();
-        const uint32_t t2 = time_.micros();
-        lastAcfDurationMs_ = (t1 - t0) / 1000;  // Profile: ACF only ([FPS] log)
-        lastPlpMs_ = (t2 - t1) / 1000;          // Profile: PLP analysis only
-        const uint32_t nowMs = time_.millis();
-        acfCost_.add(t1 - t0, nowMs);
-        plpCost_.add(t2 - t1, nowMs);
+        // A cycle shortened at runtime (acfPeriodMs) can start before the last
+        // decision finished: finish it first, on its own snapshot.
+        if (acfJobActive_) runAcfJob(true);
     }
+    // Incremental ACF: the tables take this frame's samples, except while a
+    // decision still has to read them at its snapshot (until acfDecide). Then
+    // they catch up.
+    if (!acfJobActive_ || acfJobDecided_) {
+        const int pending = acfTable_[0].pending();
+        if (pending > 0) {
+            const uint32_t tu = time_.micros();
+            // Up to 3 per frame, 1 in the frame that runs PLP (the heaviest
+            // step), all before a snapshot.
+            const int n = startDecision ? -1 : (acfPlpDue() ? 1 : 3);
+            for (int src = 0; src < 3; src++) acfTable_[src].applyPending(n);
+            acfStageCost_[ACF_STAGE_UPDATE].add(time_.micros() - tu, time_.millis());
+        }
+    }
+    if (startDecision) acfSnapshot(acfPeriodFrames);
+    if (acfJobActive_) runAcfJob(false);
+    acfSliceCost_.add(time_.micros() - tSlice, time_.millis());
 
     if (frameHook_) frameHook_(frameHookCtx_);
 }
@@ -330,65 +348,207 @@ void AudioTracker::addOssSample(float ungatedFlux) {
     if (ossCount_ < OSS_BUFFER_SIZE) ossCount_++;
 }
 
+// Pass 1 scans beat lags ACF_MIN_LAG..ACF_MAX_LAG in steps of ACF_STEP.
+static constexpr int ACF_MIN_LAG = 20;    // ~200 BPM beat rate
+static constexpr int ACF_MAX_LAG = 80;    // ~49 BPM beat rate
+static constexpr int ACF_STEP = 2;
+
+void AudioTracker::pushRhythmSample(int src, float x) {
+    // The rhythm sources are in [0, 1]: bass flux contrast and mic level are
+    // clamped there, whitened mel energy is a ratio to its running max. The
+    // table's int64 bound relies on it (SlidingAcf.h).
+    if (!(x >= 0.0f && x <= 1.0f)) {
+        BLINKY_ASSERT_ONCE(false, "AudioTracker: rhythm source outside [0, 1] (ACF table input clamped)");
+        x = (x > 1.0f) ? 1.0f : 0.0f;  // NaN -> 0
+    }
+    if (!acfTable_[src].push(RhythmAcf::quantize(x))) {
+        // Held past ACF_TABLE_SLACK frames: a scheduling bug (runAcfJob reads
+        // the table at most 4 frames after a snapshot). Catch up and say so.
+        BLINKY_ASSERT_ONCE(false, "AudioTracker: ACF table held past its slack");
+        acfTable_[src].applyPending();
+        acfTable_[src].push(RhythmAcf::quantize(x));
+    }
+}
+
+const float* AudioTracker::acfSource(int src) const {
+    switch (src) {
+        case 0: return ossLinear_;
+        case 1: return bassLinear_;
+        case 2: return nnLinear_;
+    }
+    BLINKY_ASSERT(false, "AudioTracker: unknown rhythm source");
+    return ossLinear_;
+}
+
+float AudioTracker::acfCentered(int src, int lag) {
+    // sum_{i < count-lag} (x_i - mean)(x_{i+lag} - mean) over the snapshot
+    // window: what the per-decision loops over the mean-subtracted buffers
+    // computed before the incremental tables.
+    const RhythmAcf& t = acfTable_[src];
+    if (!(lag >= 0 && lag <= ACF_TABLE_MAX_LAG && lag < t.count())) {
+        BLINKY_ASSERT_ONCE(false, "AudioTracker: ACF lag outside the table");
+        return 0.0f;
+    }
+    if (src != acfPrefixSrc_ || lag > acfPrefixMaxLag_) {
+        // Head/tail sums (O(maxLag)) up to the end of the lag range this read
+        // belongs to: pass 1 (beat lags), syncopation / bar refinement (up to a
+        // bar), or long-lag refinement (the whole table).
+        int maxLag = ACF_TABLE_MAX_LAG;
+        if (lag <= ACF_MAX_LAG + ACF_STEP + 3) maxLag = ACF_MAX_LAG + ACF_STEP + 3;
+        else if (lag <= MAX_PATTERN_LEN + 3) maxLag = MAX_PATTERN_LEN + 3;
+        if (maxLag > t.count() - 1) maxLag = t.count() - 1;
+        acfSumOverN2_ = t.prefixSums(acfHead_, acfTail_, maxLag);
+        acfPrefixSrc_ = src;
+        acfPrefixMaxLag_ = maxLag;
+    }
+    return t.centered(lag, acfHead_, acfTail_, acfSumOverN2_);
+}
+
+// Copy a circular buffer's last `count` samples, oldest first (two runs, no
+// modulo per element; also into out2 if given), and return their float sum
+// in that order: the same sum the mean-subtraction loop used to take. One
+// pass, and not a plain copy, so it is not turned into a memcpy call
+// (newlib-nano's is the size-optimized byte loop).
+static float linearizeRing(const float* ring, int size, int writeIdx, int count, float* out, float* out2) {
+    const int start = (writeIdx - count + size) % size;
+    const int first = (size - start < count) ? size - start : count;
+    float sum = 0.0f;
+    const float* src = ring + start;
+    for (int i = 0; i < first; i++) {
+        const float v = src[i];
+        out[i] = v;
+        if (out2) out2[i] = v;
+        sum += v;
+    }
+    for (int i = first; i < count; i++) {
+        const float v = ring[i - first];
+        out[i] = v;
+        if (out2) out2[i] = v;
+        sum += v;
+    }
+    return sum;
+}
+
+bool AudioTracker::acfPlpDue() const {
+    if (!acfJobActive_ || !acfJobDecided_) return false;
+    const int plpSlot = acfJobGroups_ + 2;
+    const int last = acfJobPeriodFrames_ - 1;
+    return (plpSlot < last ? plpSlot : last) <= acfJobOffset_;
+}
+
+void AudioTracker::runAcfJob(bool finishAll) {
+    // Steps by frame offset k from the snapshot frame (P = acfPeriodFrames at
+    // the snapshot, G = pass-2 groups = clamp(P - 3, 1, 3)):
+    //   k = 0        snapshot + pass 1 + candidates (acfSnapshot, already run)
+    //   k = 1..G     pass 2, a third of the candidates each (at P >= 6)
+    //   k = G + 1    refinement + accent fold: the decision is applied
+    //   k = G + 2    PLP
+    // Each slot is clamped to P - 1, so a decision always finishes inside its
+    // own cycle (P = 1 runs everything in the snapshot frame, as before).
+    // The table is held at the snapshot until the decision is applied, then
+    // catches up (processFrame). Typical device cost per frame at P = 6
+    // (14 candidates): ~1.6 ms at k = 0 (catch-up, linearize, pass 1,
+    // syncopation), ~0.8 ms at k = 1..3, ~1.1 ms at k = 4, PLP (1-2 ms) at
+    // k = 5; the whole decision was 17-19.5 ms in one frame before.
+    const int k = finishAll ? 1 << 20 : acfJobOffset_;
+    const int last = acfJobPeriodFrames_ - 1;
+    auto slot = [last](int s) { return s < last ? s : last; };
+    if (!acfJobDecided_) {
+        for (int g = 0; g < acfJobGroups_; g++) {
+            if (slot(1 + g) > k) break;
+            const int end = (acfNumCands_ * (g + 1)) / acfJobGroups_;
+            if (end > acfNextCand_) {
+                const uint32_t t0 = time_.micros();
+                acfScoreCandidates(end);
+                const uint32_t dt = time_.micros() - t0;
+                acfJobPass2Us_ += dt;
+                acfJobUs_ += dt;
+            }
+        }
+        if (slot(acfJobGroups_ + 1) <= k) {
+            const uint32_t nowMs = time_.millis();
+            acfStageCost_[ACF_STAGE_PASS2].add(acfJobPass2Us_, nowMs);
+            acfDecide();
+            acfJobDecided_ = true;
+            acfCost_.add(acfJobUs_, time_.millis());
+            lastAcfDurationMs_ = acfJobUs_ / 1000;  // Profile: ACF only ([FPS] log)
+        }
+    }
+    if (acfJobDecided_ && slot(acfJobGroups_ + 2) <= k) {
+        const uint32_t t0 = time_.micros();
+        updatePlpAnalysis();
+        const uint32_t dt = time_.micros() - t0;
+        lastPlpMs_ = dt / 1000;                 // Profile: PLP analysis only
+        plpCost_.add(dt, time_.millis());
+        acfJobActive_ = false;
+    }
+    acfJobOffset_++;
+}
+
 // ============================================================================
 // Multi-Source ACF — Period Detection + Epoch-Fold Pattern Scoring
 // ============================================================================
-// Replaces the Fourier Tempogram (Goertzel DFT, 75ms) with autocorrelation
-// (~4ms). ACF scans beat-level lags (20-80) on 3 sources, then generates
-// bar-level candidates via integer multiples (2×/3×/4×). Epoch-fold variance
-// scoring selects the period with the best pattern contrast, biasing toward
-// full-bar patterns over single-beat periods.
+// Replaces the Fourier Tempogram (Goertzel DFT, 75ms) with autocorrelation.
+// ACF scans beat-level lags (20-80) on 3 sources, then generates bar-level
+// candidates via integer multiples (2×/3×/4×). Epoch-fold variance scoring
+// selects the period with the best pattern contrast, biasing toward full-bar
+// patterns over single-beat periods. The ACF values come from the exact
+// incremental tables (SlidingAcf.h) instead of per-decision loops.
 
-void AudioTracker::runAcf() {
-    // Linearize all source circular buffers into class members.
-    int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-    for (int i = 0; i < ossCount_; i++) {
-        int idx = (startIdx + i) % OSS_BUFFER_SIZE;
-        ossLinear_[i] = ossBuffer_[idx];
-    }
-    int bStart = (bassWriteIdx_ - bassCount_ + BASS_BUFFER_SIZE) % BASS_BUFFER_SIZE;
-    for (int i = 0; i < bassCount_; i++) bassLinear_[i] = bassBuffer_[(bStart + i) % BASS_BUFFER_SIZE];
-    int nStart = (nnWriteIdx_ - nnCount_ + NN_BUFFER_SIZE) % NN_BUFFER_SIZE;
-    for (int i = 0; i < nnCount_; i++) nnLinear_[i] = nnOnsetBuffer_[(nStart + i) % NN_BUFFER_SIZE];
+void AudioTracker::acfSnapshot(int periodFrames) {
+    const uint32_t tLin = time_.micros();
+    acfSnapFrame_ = frameClock_;
+    acfSnapCount_[0] = ossCount_;
+    acfSnapCount_[1] = bassCount_;
+    acfSnapCount_[2] = nnCount_;
+    acfSnapLevelEnv_ = levelEnv_;  // PLP's confidence gate reads the level at the snapshot
 
-    // Mean-subtract each source IN-PLACE (removes DC for clean ACF/epoch-fold).
-    // NOTE: updatePlpAnalysis() reads these mean-subtracted buffers.
+    // Linearize all source circular buffers into class members. The raw
+    // OSS copy (epochFoldLinear_) is the PLP epoch-fold source.
+    float sums[3];
+    sums[0] = linearizeRing(ossBuffer_, OSS_BUFFER_SIZE, ossWriteIdx_, ossCount_, ossLinear_, epochFoldLinear_);
+    sums[1] = linearizeRing(bassBuffer_, BASS_BUFFER_SIZE, bassWriteIdx_, bassCount_, bassLinear_, nullptr);
+    sums[2] = linearizeRing(nnOnsetBuffer_, NN_BUFFER_SIZE, nnWriteIdx_, nnCount_, nnLinear_, nullptr);
+
+    // Mean-subtract each source IN-PLACE (removes DC for clean epoch folds).
+    // NOTE: pass 2, the accent fold and updatePlpAnalysis() read these.
     float* sources[3] = { ossLinear_, bassLinear_, nnLinear_ };
-    const int sourceCounts[3] = { ossCount_, bassCount_, nnCount_ };
-
+    const int* sourceCounts = acfSnapCount_;
     for (int src = 0; src < 3; src++) {
         int count = sourceCounts[src];
         if (count < 20) continue;
-        float mean = 0.0f;
-        for (int i = 0; i < count; i++) mean += sources[src][i];
+        float mean = sums[src];
         mean /= count;
         for (int i = 0; i < count; i++) sources[src][i] -= mean;
     }
+    // The tables hold the same window (all pending samples applied by the caller).
+    acfPrefixSrc_ = -1;
+    acfPrefixMaxLag_ = -1;
+    for (int src = 0; src < 3; src++) {
+        BLINKY_ASSERT_ONCE(acfTable_[src].pending() == 0 && acfTable_[src].count() == sourceCounts[src],
+                           "AudioTracker: ACF table out of step with its source buffer");
+    }
+    const uint32_t tP1 = time_.micros();
+
     // --- Pass 1: Multi-source ACF at beat-level lags ---
     // Scan lags 20-80 (200-49 BPM beat rate) with step=2.
     // Bar-level candidates are generated from multiples, not scanned directly.
-    // Cost: ~31 lags × 3 sources × ~700 overlap ≈ 65K MACs (~4ms on M4F).
     // Parabolic interpolation on peaks recovers sub-step resolution (odd lags).
-    static constexpr int TOP_N = 5;
-    static constexpr int ACF_MIN_LAG = 20;    // ~200 BPM beat rate
-    static constexpr int ACF_MAX_LAG = 80;    // ~49 BPM beat rate
-    static constexpr int ACF_STEP = 2;
-
     struct AcfPeak {
         float strength;   // Normalized ACF value at peak (0-1)
         int period;
         int source;
     };
-    AcfPeak beatPeaks[TOP_N] = {};
+    AcfPeak beatPeaks[ACF_TOP_N] = {};
+    float zeroLags[3] = {0.0f, 0.0f, 0.0f};  // zero-lag energy, once per source (pass 1 and syncopation)
 
     for (int src = 0; src < 3; src++) {
         int count = sourceCounts[src];
         if (count < ACF_MAX_LAG * 2) continue;
-        const float* buf = sources[src];
 
         // Zero-lag energy for normalization (unbiased ACF)
-        float zeroLag = 0.0f;
-        for (int i = 0; i < count; i++) zeroLag += buf[i] * buf[i];
+        float zeroLag = acfCentered(src, 0);
+        zeroLags[src] = zeroLag;
         if (zeroLag < 1e-10f) continue;
 
         // Scan ACF with local-maximum peak detection.
@@ -397,12 +557,7 @@ void AudioTracker::runAcf() {
         int scanEnd = min(ACF_MAX_LAG + ACF_STEP, count / 2 - 1);
         float prevAcf = 0.0f, prevPrevAcf = 0.0f;
         for (int lag = ACF_MIN_LAG; lag <= scanEnd; lag += ACF_STEP) {
-            float sum = 0.0f;
-            int overlap = count - lag;
-            for (int i = 0; i < overlap; i++) {
-                sum += buf[i] * buf[i + lag];
-            }
-            float acfVal = sum / zeroLag;
+            float acfVal = acfCentered(src, lag) / zeroLag;
 
             // Peak: previous sample was a local maximum above threshold
             // Only record if the peak lag is within the valid scan range
@@ -427,7 +582,7 @@ void AudioTracker::runAcf() {
 
                 // Insert into top-N with 10% minimum period separation
                 bool tooClose = false;
-                for (int k = 0; k < TOP_N; k++) {
+                for (int k = 0; k < ACF_TOP_N; k++) {
                     if (beatPeaks[k].strength > 0.01f &&
                         abs(peakLag - beatPeaks[k].period) <= beatPeaks[k].period / 10) {
                         if (peakStrength > beatPeaks[k].strength) {
@@ -439,7 +594,7 @@ void AudioTracker::runAcf() {
                 }
                 if (!tooClose) {
                     int minIdx = 0;
-                    for (int k = 1; k < TOP_N; k++) {
+                    for (int k = 1; k < ACF_TOP_N; k++) {
                         if (beatPeaks[k].strength < beatPeaks[minIdx].strength) minIdx = k;
                     }
                     if (peakStrength > beatPeaks[minIdx].strength) {
@@ -456,32 +611,16 @@ void AudioTracker::runAcf() {
     // Bar patterns are 2×/3×/4× the beat period. Epoch-fold variance scoring
     // selects bar-length periods over beat-length when the pattern is structured
     // (e.g., kick-snare-kick-snare has higher variance at 4× than at 1×).
-    static constexpr int MULTIPLIERS[] = { 1, 2, 3, 4 };
-    static constexpr int NUM_MULTIPLIERS = 4;
-    // Syncopation-derived candidates (#166): per beat peak, 2 beat hypotheses
-    // (L*2/3, L*2/5) x 2 bar multipliers (2x, 4x).
-    static constexpr int SYNC_FRACS = 2;
-    static constexpr int SYNC_MULTS = 2;
-    static constexpr int MAX_CANDIDATES = TOP_N * (NUM_MULTIPLIERS + SYNC_FRACS * SYNC_MULTS);
-
-    struct ScoredCandidate {
-        float acfStrength;
-        int period;
-        int source;
-        int multiplier;   // 1=beat, 2/3/4=bar-level
-        bool derived;     // syncopation-derived (#166): score scaled by syncopatedCandidateScale
-    };
-    static_assert(MAX_CANDIDATES == TOP_N * (NUM_MULTIPLIERS + SYNC_FRACS * SYNC_MULTS),
-                  "MAX_CANDIDATES invariant");
-    ScoredCandidate candidates[MAX_CANDIDATES] = {};
+    static constexpr int MULTIPLIERS[ACF_NUM_MULTIPLIERS] = { 1, 2, 3, 4 };
+    AcfCandidate* candidates = acfCands_;
     int numCandidates = 0;
 
-    for (int k = 0; k < TOP_N; k++) {
+    for (int k = 0; k < ACF_TOP_N; k++) {
         if (beatPeaks[k].strength < 0.01f) continue;
-        for (int m = 0; m < NUM_MULTIPLIERS; m++) {
+        for (int m = 0; m < ACF_NUM_MULTIPLIERS; m++) {
             int cPeriod = beatPeaks[k].period * MULTIPLIERS[m];
             if (cPeriod > MAX_PATTERN_LEN) continue;
-            if (cPeriod >= ossCount_ / 2) continue;  // Need 2+ epochs
+            if (cPeriod >= sourceCounts[0] / 2) continue;  // Need 2+ epochs (OSS window)
 
             // Skip near-duplicates
             bool dup = false;
@@ -490,11 +629,12 @@ void AudioTracker::runAcf() {
             }
             if (dup) continue;
 
-            if (numCandidates < MAX_CANDIDATES) {
+            if (numCandidates < ACF_MAX_CANDIDATES) {
                 candidates[numCandidates++] = { beatPeaks[k].strength, cPeriod, beatPeaks[k].source, MULTIPLIERS[m], false };
             }
         }
     }
+    const uint32_t tSync = time_.micros();
 
     // --- Syncopation-derived bar candidates (#166) ---
     // Breakbeat / DnB / 2-step accent patterns (kick on 1 and the "and" of 3,
@@ -504,21 +644,19 @@ void AudioTracker::runAcf() {
     // beat hypotheses b = 2L/3 (L was 1.5 beats) and 2L/5 (L was 2.5 beats), and
     // add bar-level candidates at 2b and 4b scored with the ACTUAL ACF at that
     // lag, not the parent peak's. Wrong hypotheses get a weak ACF and lose in
-    // Pass 2 on their own; nothing is forced. Cost: <= TOP_N*4 single-lag ACFs.
+    // Pass 2 on their own; nothing is forced. Cost: <= TOP_N*4 table reads.
     if (syncopatedCandidateScale > 0.0f) {
-        static constexpr int FRAC_NUM[SYNC_FRACS] = { 2, 2 };
-        static constexpr int FRAC_DEN[SYNC_FRACS] = { 3, 5 };
-        static constexpr int SYNC_MULT[SYNC_MULTS] = { 2, 4 };
-        for (int k = 0; k < TOP_N; k++) {
+        static constexpr int FRAC_NUM[ACF_SYNC_FRACS] = { 2, 2 };
+        static constexpr int FRAC_DEN[ACF_SYNC_FRACS] = { 3, 5 };
+        static constexpr int SYNC_MULT[ACF_SYNC_MULTS] = { 2, 4 };
+        for (int k = 0; k < ACF_TOP_N; k++) {
             if (beatPeaks[k].strength < 0.01f) continue;
             const int src = beatPeaks[k].source;
-            const float* buf = sources[src];
             const int count = sourceCounts[src];
-            float zero = 0.0f;
-            for (int i = 0; i < count; i++) zero += buf[i] * buf[i];
+            const float zero = zeroLags[src];  // a beat peak's source passed pass 1's zero-lag check
             if (zero < 1e-10f) continue;
             const float zeroMean = zero / static_cast<float>(count);
-            for (int f = 0; f < SYNC_FRACS; f++) {
+            for (int f = 0; f < ACF_SYNC_FRACS; f++) {
                 // b is rounded BEFORE the bar multiplier, so 4-beat candidates
                 // sit on multiples of 4 frames and can miss the exact bar peak
                 // by up to 2 frames (L=56, 2/5 -> 88, true 90). Rounding once
@@ -529,7 +667,7 @@ void AudioTracker::runAcf() {
                 // phase alignment itself improves.
                 const int b = (beatPeaks[k].period * FRAC_NUM[f] + FRAC_DEN[f] / 2) / FRAC_DEN[f];
                 if (b < ACF_MIN_LAG) continue;
-                for (int m = 0; m < SYNC_MULTS; m++) {
+                for (int m = 0; m < ACF_SYNC_MULTS; m++) {
                     const int cPeriod = b * SYNC_MULT[m];
                     if (cPeriod > MAX_PATTERN_LEN || cPeriod >= count / 2) continue;
                     // Dedupe within this source only: the same period from a
@@ -550,35 +688,58 @@ void AudioTracker::runAcf() {
                     if (dup) continue;
                     // Unbiased normalized ACF at the bar lag.
                     const int overlap = count - cPeriod;
-                    float sum = 0.0f;
-                    for (int i = 0; i < overlap; i++) sum += buf[i] * buf[i + cPeriod];
-                    const float acf = sum / static_cast<float>(overlap) / zeroMean;
+                    const float acf = acfCentered(src, cPeriod) / static_cast<float>(overlap) / zeroMean;
                     if (acf < 0.05f) continue;
-                    if (numCandidates < MAX_CANDIDATES) {
+                    if (numCandidates < ACF_MAX_CANDIDATES) {
                         candidates[numCandidates++] = { clampf(acf, 0.0f, 1.0f), cPeriod, src, SYNC_MULT[m], true };
                     }
                 }
             }
         }
     }
+    const uint32_t tEnd = time_.micros();
 
+    acfNumCands_ = numCandidates;
+    acfNextCand_ = 0;
+    acfBestScore_ = -1.0f;
+    acfBestStrength_ = 0.0f;
+    acfBestPeriod_ = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
+    acfBestAccentBin_ = 0.0f;
+    acfBestSource_ = 0;
+    acfBestMultiplier_ = 1;
+    acfBestDerived_ = false;
+
+    acfJobActive_ = true;
+    acfJobDecided_ = false;
+    acfJobOffset_ = 0;
+    acfJobPeriodFrames_ = periodFrames;
+    int groups = periodFrames - 3;
+    if (groups > ACF_MAX_PASS2_GROUPS) groups = ACF_MAX_PASS2_GROUPS;
+    if (groups < 1) groups = 1;
+    acfJobGroups_ = groups;
+    acfJobPhaseFrames_ = 0.0f;
+    acfJobPass2Us_ = 0;
+    acfJobUs_ = tEnd - tLin;
+
+    const uint32_t nowMs = time_.millis();
+    acfStageCost_[ACF_STAGE_LINEARIZE].add(tP1 - tLin, nowMs);
+    acfStageCost_[ACF_STAGE_PASS1].add(tSync - tP1, nowMs);
+    acfStageCost_[ACF_STAGE_SYNC].add(tEnd - tSync, nowMs);
+}
+
+void AudioTracker::acfScoreCandidates(int end) {
     // --- Pass 2: Score candidates by epoch-fold pattern quality ---
     // Reuses tempogram Pass 2 logic: the period that produces the highest-contrast
     // pattern is the one that creates the best visual pulse. Each candidate is
     // scored using its own source buffer for fair cross-source comparison.
-    float bestScore = -1.0f;
-    float bestStrength = 0.0f;
-    int bestPeriod = static_cast<int>(OSS_FRAMES_PER_MIN / 120.0f);
-    float bestAccentBin = 0.0f;
-    int bestSource = 0;
-    int bestMultiplier = 1;
-    bool bestDerived = false;
-
-    for (int c = 0; c < numCandidates; c++) {
-        int cPeriod = candidates[c].period;
-        int cSource = candidates[c].source;
-        const float* cBuf = sources[cSource];
-        int cCount = sourceCounts[cSource];
+    // Called in slices; candidates are scored in order with a running best, so
+    // the winner is the one a single pass would pick.
+    for (int c = acfNextCand_; c < end; c++) {
+        const AcfCandidate& cand = acfCands_[c];
+        int cPeriod = cand.period;
+        int cSource = cand.source;
+        const float* cBuf = acfSource(cSource);
+        int cCount = acfSnapCount_[cSource];
 
         if (cCount < cPeriod * 2) continue;
 
@@ -615,9 +776,9 @@ void AudioTracker::runAcf() {
         // 4× bar periods always win because they capture more structure.
         // Penalty: divide by sqrt(multiplier) — 2× needs 1.41× more contrast,
         // 4× needs 2× more contrast to win over the beat-level period.
-        float multiplierPenalty = sqrtf(static_cast<float>(candidates[c].multiplier));
-        float score = candidates[c].acfStrength * sqrtf(variance) / multiplierPenalty;
-        if (candidates[c].derived) score *= syncopatedCandidateScale;
+        float multiplierPenalty = sqrtf(static_cast<float>(cand.multiplier));
+        float score = cand.acfStrength * sqrtf(variance) / multiplierPenalty;
+        if (cand.derived) score *= syncopatedCandidateScale;
 
         // Tempo prior on the BEAT lag (Ellis 2007-style log-Gaussian around
         // 120 BPM). ACF peaks at 1.5x / 2x the true beat lag are often as
@@ -625,12 +786,12 @@ void AudioTracker::runAcf() {
         // bar length they produced 6-8-beat "cycles". The prior breaks those
         // ties toward musically common tempi without forbidding any.
         if (tempoPriorWidth > 0.0f) {
-            float beatLag = static_cast<float>(cPeriod) / static_cast<float>(candidates[c].multiplier);
+            float beatLag = static_cast<float>(cPeriod) / static_cast<float>(cand.multiplier);
             float oct = log2f(beatLag / (OSS_FRAMES_PER_MIN / 120.0f)) / tempoPriorWidth;
             score *= expf(-0.5f * oct * oct);
         }
 
-        if (score > bestScore) {
+        if (score > acfBestScore_) {
             // Phase from epoch-fold peak position (where the main accent falls).
             // Parabolic interpolation on the 3 bins around the peak gives sub-frame
             // precision (~0.3% vs ~3% integer-bin at 120 BPM). Same technique used
@@ -654,15 +815,30 @@ void AudioTracker::runAcf() {
                 }
             }
 
-            bestScore = score;
-            bestStrength = candidates[c].acfStrength;
-            bestPeriod = cPeriod;
-            bestAccentBin = refinedBin;
-            bestSource = cSource;
-            bestMultiplier = candidates[c].multiplier;
-            bestDerived = candidates[c].derived;
+            acfBestScore_ = score;
+            acfBestStrength_ = cand.acfStrength;
+            acfBestPeriod_ = cPeriod;
+            acfBestAccentBin_ = refinedBin;
+            acfBestSource_ = cSource;
+            acfBestMultiplier_ = cand.multiplier;
+            acfBestDerived_ = cand.derived;
         }
     }
+    if (end > acfNextCand_) acfNextCand_ = end;
+}
+
+void AudioTracker::acfDecide() {
+    // Any candidates a shortened schedule left unscored (runAcfJob slots).
+    if (acfNextCand_ < acfNumCands_) acfScoreCandidates(acfNumCands_);
+
+    const uint32_t tRefine = time_.micros();
+    const float bestScore = acfBestScore_;
+    const float bestStrength = acfBestStrength_;
+    const int bestPeriod = acfBestPeriod_;
+    float bestAccentBin = acfBestAccentBin_;
+    const int bestSource = acfBestSource_;
+    const int bestMultiplier = acfBestMultiplier_;
+    const bool bestDerived = acfBestDerived_;
 
     acfPeakStrength_ = bestStrength;
 
@@ -672,7 +848,22 @@ void AudioTracker::runAcf() {
 
     // No candidate (silence / flat buffers): keep the last period and phase
     // rather than steering toward the default placeholder period.
-    if (bestScore < 0.0f) return;
+    if (bestScore < 0.0f) {
+#ifdef BLINKY_HOST_HARNESS
+        if (acfTraceHook_) {
+            AcfTrace tr = {};
+            for (int s = 0; s < 3; s++) { tr.sources[s] = acfSource(s); tr.counts[s] = acfSnapCount_[s]; }
+            tr.snapFrame = acfSnapFrame_;
+            tr.applyFrame = frameClock_;
+            tr.valid = false;
+            acfTraceHook_(acfTraceCtx_, tr);
+        }
+#endif
+        const uint32_t t = time_.micros() - tRefine;
+        acfStageCost_[ACF_STAGE_REFINE].add(t, time_.millis());
+        acfJobUs_ += t;
+        return;
+    }
 
     // --- Fractional period ---
     // Candidate periods are integer frames (the fold needs integer bins), but
@@ -689,8 +880,7 @@ void AudioTracker::runAcf() {
     // in the phase advance.
     float periodF = static_cast<float>(bestPeriod);
     {
-        const float* buf = sources[bestSource];
-        const int count = sourceCounts[bestSource];
+        const int count = acfSnapCount_[bestSource];
         const int refineMultiplier = bestDerived ? 1 : bestMultiplier;
         int lag = bestPeriod / refineMultiplier;
         // UNBIASED estimator (divide by overlap). The plain sum shrinks
@@ -698,10 +888,8 @@ void AudioTracker::runAcf() {
         // measured ~0.7% short (29.07 vs 29.30 frames at 128 BPM), a steady
         // phase drift the corrections had to keep fighting.
         auto acfAt = [&](int L) -> float {
-            float sum = 0.0f;
             int overlap = count - L;
-            for (int i = 0; i < overlap; i++) sum += buf[i] * buf[i + L];
-            return (overlap > 0) ? sum / static_cast<float>(overlap) : 0.0f;
+            return (overlap > 0) ? acfCentered(bestSource, L) / static_cast<float>(overlap) : 0.0f;
         };
         if (lag > 2 && lag + 1 < count / 2) {
             float a = acfAt(lag - 1), b = acfAt(lag), c = acfAt(lag + 1);
@@ -725,7 +913,7 @@ void AudioTracker::runAcf() {
             // period carries the same quantization error spread over K
             // periods: refine the peak near K·lagF and divide by K.
             int K = static_cast<int>((count / 2 - 2) / lagF);
-            if (K > 12) K = 12;
+            if (K > ACF_REFINE_MAX_K) K = ACF_REFINE_MAX_K;
             if (K >= 3) {
                 int center = static_cast<int>(K * lagF + 0.5f);
                 int halfWin = K / 2 + 1;  // ±0.5 frame/period uncertainty × K
@@ -755,6 +943,7 @@ void AudioTracker::runAcf() {
             }
         }
     }
+    const uint32_t tAccent = time_.micros();
 
     // --- Accent position from the TRANSIENT source ---
     // The winning period may come from the bass-energy or NN buffer, but
@@ -765,12 +954,13 @@ void AudioTracker::runAcf() {
     // (measured on techno-dub-groove: 30% of the time in 0.9-1.0). The OSS
     // buffer is half-wave-rectified bass flux (kick onsets, no trend), so
     // its fold peak is where the kick actually lands in the cycle.
-    if (ossCount_ >= bestPeriod * 2) {
+    const int ossCount = acfSnapCount_[0];
+    if (ossCount >= bestPeriod * 2) {
         float* fold = scratchFold_;
         memset(fold, 0, bestPeriod * sizeof(float));
         float totalWeight = 0.0f;
         int epochs = 0;
-        for (int offset = ossCount_ - bestPeriod; offset >= 0; offset -= bestPeriod) {
+        for (int offset = ossCount - bestPeriod; offset >= 0; offset -= bestPeriod) {
             float weight = expf(-plpDecayRate * epochs);
             for (int j = 0; j < bestPeriod; j++) fold[j] += ossLinear_[offset + j] * weight;
             totalWeight += weight;
@@ -799,6 +989,7 @@ void AudioTracker::runAcf() {
             }
         }
     }
+    const uint32_t tApply = time_.micros();
 
     // A period jump > 10% means a different rhythm interpretation: snap phase.
     bool periodJump = !phaseLocked_ ||
@@ -811,18 +1002,40 @@ void AudioTracker::runAcf() {
     plpAccentPhase_ = bestAccentBin / static_cast<float>(bestPeriod);  // diagnostic
 
     // --- Phase from the fold ---
-    // The fold is END-ALIGNED: bin P-1 holds the newest frame (the one just
-    // processed). So the time since the accent is (P-1 - accentBin) frames,
-    // which gives the phase of "now" directly. (Pre-b208 the code treated
-    // the accent bin as a fixed offset from a free-running counter, but it
-    // rotates by one bin per frame as the buffer advances — phase ran ~2x
-    // tempo and jumped every analysis.)
+    // The fold is END-ALIGNED: bin P-1 holds the newest frame of the snapshot.
+    // So the time since the accent is (P-1 - accentBin) frames, which gives
+    // the phase at the snapshot frame. (Pre-b208 the code treated the accent
+    // bin as a fixed offset from a free-running counter, but it rotates by one
+    // bin per frame as the buffer advances — phase ran ~2x tempo and jumped
+    // every analysis.) The decision is applied acfJobPhaseFrames_ frames of
+    // phase time after the snapshot (0 when it runs in the snapshot frame), so
+    // the target moves on by those frames at the new period: the phase the old
+    // inline correction would have reached by now.
     float framesSinceAccent = static_cast<float>(bestPeriod - 1) - bestAccentBin;
     if (framesSinceAccent < 0.0f) framesSinceAccent += static_cast<float>(bestPeriod);
-    float targetPhase = framesSinceAccent / periodF;
+    float targetPhase = (framesSinceAccent + acfJobPhaseFrames_) / periodF;
     targetPhase -= floorf(targetPhase);
     correctPlpPhase(targetPhase, periodJump ? 1.0f : plpPhaseGain);
     phaseLocked_ = true;
+
+#ifdef BLINKY_HOST_HARNESS
+    if (acfTraceHook_) {
+        AcfTrace tr = {};
+        for (int s = 0; s < 3; s++) { tr.sources[s] = acfSource(s); tr.counts[s] = acfSnapCount_[s]; }
+        tr.snapFrame = acfSnapFrame_;
+        tr.applyFrame = frameClock_;
+        tr.valid = true;
+        tr.period = bestPeriod;
+        tr.periodF = periodF;
+        tr.accentBin = bestAccentBin;
+        float snapTarget = framesSinceAccent / periodF;
+        tr.snapTargetPhase = snapTarget - floorf(snapTarget);
+        tr.source = bestSource;
+        tr.multiplier = bestMultiplier;
+        tr.strength = bestStrength;
+        acfTraceHook_(acfTraceCtx_, tr);
+    }
+#endif
 
     // BPM from the fractional period (informational + pulse cooldown)
     // Always smoothed toward the estimate. (Was: only updated when the
@@ -837,6 +1050,12 @@ void AudioTracker::runAcf() {
         resetSlots();
     }
     prevBpm_ = bpm_;
+
+    const uint32_t tEnd = time_.micros();
+    const uint32_t nowMs = time_.millis();
+    acfStageCost_[ACF_STAGE_REFINE].add(tAccent - tRefine, nowMs);
+    acfStageCost_[ACF_STAGE_ACCENT].add(tApply - tAccent, nowMs);
+    acfJobUs_ += tEnd - tRefine;
 }
 
 // ============================================================================
@@ -857,7 +1076,11 @@ void AudioTracker::updatePlpAnalysis() {
     // plpPatternLen_ is committed only once plpPattern_ holds a pattern of
     // that length (below) — an early return here used to leave the new
     // length paired with the old pattern's contents.
-    if (ossCount_ < patLen * 2) return;
+    // Reads the analysis snapshot (acfSnapshot): the same window the period
+    // came from, whichever frame of the cycle this runs in.
+    const int ossCount = acfSnapCount_[0];
+    const int nnCount = acfSnapCount_[2];
+    if (ossCount < patLen * 2) return;
 
     // --- 2. Epoch fold for pattern extraction ---
     // Epoch-fold broadband spectral flux (bass-contrast weighted) at the ACF period.
@@ -871,11 +1094,7 @@ void AudioTracker::updatePlpAnalysis() {
     //   3. Winsorized mean: drop most extreme epoch per bin before averaging
     //   4. Cross-correlation with NN fold for pattern validation
     {
-        int count = ossCount_;
-        int sIdx = (ossWriteIdx_ - count + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-        for (int i = 0; i < count; i++) {
-            epochFoldLinear_[i] = ossBuffer_[(sIdx + i) % OSS_BUFFER_SIZE];
-        }
+        int count = ossCount;  // epochFoldLinear_: raw OSS, linearized at the snapshot
 
         // Count epochs for Winsorized mean
         int numEpochs = 0;
@@ -903,7 +1122,7 @@ void AudioTracker::updatePlpAnalysis() {
             for (int offset = count - patLen; offset >= 0 && ep < actualEpochs; offset -= patLen) {
                 // Mean source-2 (mic level) value for this epoch
                 float nnMean = 0.0f;
-                if (nnCount_ >= count) {
+                if (nnCount >= count) {
                     for (int j = 0; j < patLen; j++) {
                         nnMean += nnLinear_[offset + j];
                     }
@@ -1003,12 +1222,12 @@ void AudioTracker::updatePlpAnalysis() {
         // Cross-correlation with the source-2 fold (mic level since #155, not
         // the NN) for pattern validation. High agreement = the flux pattern
         // matches the energy envelope. Low = noise-driven.
-        if (nnCount_ >= patLen * 2) {
+        if (nnCount >= patLen * 2) {
             float* nnFold = scratchNN_;
             memset(nnFold, 0, patLen * sizeof(float));
             float nnWeight = 0.0f;
             float w = 1.0f;
-            for (int offset = nnCount_ - patLen; offset >= 0; offset -= patLen) {
+            for (int offset = nnCount - patLen; offset >= 0; offset -= patLen) {
                 for (int j = 0; j < patLen; j++) {
                     nnFold[j] += nnLinear_[offset + j] * w;
                 }
@@ -1028,7 +1247,7 @@ void AudioTracker::updatePlpAnalysis() {
         // end-aligned (bin P-1 = newest frame), so its rotation changes every
         // analysis as frames arrive. Reading it by phase, comparing it with
         // cached slots, or matching it to the seed templates (accent at bin
-        // 0) all require a stable origin. runAcf() measured the accent on
+        // 0) all require a stable origin. acfDecide() measured the accent on
         // the same end-aligned fold at the same period, so its bin applies.
         if (patLen == plpBestPeriod_) {
             int shift = static_cast<int>(plpAccentBin_ + 0.5f) % patLen;
@@ -1051,7 +1270,7 @@ void AudioTracker::updatePlpAnalysis() {
     // --- 3. PLP confidence from ACF strength + steep signal gate ---
     float acfConf = clampf(acfPeakStrength_, 0.0f, 1.0f);
     // Smoothed (~1 s) level, not one instantaneous sample — see update().
-    float signalPresence = clampf((levelEnv_ - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
+    float signalPresence = clampf((acfSnapLevelEnv_ - plpSignalFloor * 0.5f) / (plpSignalFloor * 0.5f), 0.0f, 1.0f);
     float targetConf = acfConf * signalPresence * (0.5f + 0.5f * plpNNAgreement_);
     plpConfidence_ += (targetConf - plpConfidence_) * plpConfAlpha;
 }

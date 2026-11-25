@@ -603,9 +603,13 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(audioCtrl_->getSpectral().getOnsetUs());
             out_.print(F(",\"onsetMaxUs\":"));
             out_.print(audioCtrl_->getSpectral().getOnsetMaxUs());
-            // ACF tempo + PLP pattern cost per run (every acfPeriodMs, inline in the audio
-            // update), mean and max over the last closed 5 s window: a long run stretches the
-            // loop iteration it lands in, which maxFrameMs shows but cannot attribute.
+            // Tempo analysis cost, mean and max over the last closed 5 s window. acf / plp: one
+            // decision's ACF work and its PLP (every acfPeriodMs, spread over that cycle's
+            // frames). acfSlice: all tempo work in one spectral frame, i.e. what one loop
+            // iteration carries (compare maxFrameMs). acfStage: per stage, in AcfStage order
+            // [linearize, pass1, sync, pass2, refine, accent, update]; update is per frame
+            // (incremental ACF tables), the rest per decision. Device micros() is the RTOS tick
+            // (~977 us steps): means are dithered estimates, maxima quantized to ~1 ms.
             out_.print(F(",\"acfUs\":"));
             out_.print(audioCtrl_->getAcfUs());
             out_.print(F(",\"acfMaxUs\":"));
@@ -614,6 +618,21 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(audioCtrl_->getPlpUs());
             out_.print(F(",\"plpMaxUs\":"));
             out_.print(audioCtrl_->getPlpMaxUs());
+            out_.print(F(",\"acfSliceUs\":"));
+            out_.print(audioCtrl_->getAcfSliceUs());
+            out_.print(F(",\"acfSliceMaxUs\":"));
+            out_.print(audioCtrl_->getAcfSliceMaxUs());
+            out_.print(F(",\"acfStageUs\":["));
+            for (int s = 0; s < AudioTracker::ACF_STAGE_COUNT; s++) {
+                if (s) out_.print(',');
+                out_.print(audioCtrl_->getAcfStageUs(s));
+            }
+            out_.print(F("],\"acfStageMaxUs\":["));
+            for (int s = 0; s < AudioTracker::ACF_STAGE_COUNT; s++) {
+                if (s) out_.print(',');
+                out_.print(audioCtrl_->getAcfStageMaxUs(s));
+            }
+            out_.print(']');
         }
 
         // Main-loop fps + frame-time range (#137). The publicly-readable

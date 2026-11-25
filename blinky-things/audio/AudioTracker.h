@@ -40,6 +40,7 @@ struct FrameOnsetNN {
 #include "SharedSpectralAnalysis.h"
 #include "OnsetDetector.h"
 #include "PhaseClock.h"
+#include "SlidingAcf.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
@@ -137,14 +138,48 @@ public:
     float getBpmMax() const { return bpmMax; }
     uint32_t getLastAcfMs() const { return lastAcfDurationMs_; }
     uint32_t getLastPlpMs() const { return lastPlpMs_; }
-    // ACF (runAcf) and PLP (updatePlpAnalysis) cost per run, mean and max in us over the last
-    // closed 5 s window (0 until one closes), like SharedSpectralAnalysis's onsetUs. They run
-    // inline in processFrame every acfPeriodMs, so a long one stretches that loop iteration and
-    // delays any onset drawn in it: `json info` reports them next to maxFrameMs.
+    // Tempo analysis cost, mean and max in us over the last closed 5 s window (0 until one
+    // closes), like SharedSpectralAnalysis's onsetUs. acf = one decision's ACF work (snapshot,
+    // pass 1, syncopation candidates, pass 2, refinement, accent fold), summed over the frames
+    // it is spread across; plp = updatePlpAnalysis per decision. A decision is spread over the
+    // frames of one acfPeriodMs cycle, so what a single loop iteration carries is the slice:
+    // all tempo work in one spectral frame (the incremental ACF update plus whatever analysis
+    // steps fall in it). `json info` reports these next to maxFrameMs.
+    // Device note: micros() on this core is the FreeRTOS tick (1024 Hz, ~977 us steps) unless
+    // the DWT is enabled, so a mean is a dithered estimate and a max is quantized to ~1 ms.
     uint32_t getAcfUs() const { return acfCost_.mean; }
     uint32_t getAcfMaxUs() const { return acfCost_.maxClosed; }
     uint32_t getPlpUs() const { return plpCost_.mean; }
     uint32_t getPlpMaxUs() const { return plpCost_.maxClosed; }
+    uint32_t getAcfSliceUs() const { return acfSliceCost_.mean; }
+    uint32_t getAcfSliceMaxUs() const { return acfSliceCost_.maxClosed; }
+    // Per-stage cost (AcfStage order): mean / max over the last closed 5 s window.
+    enum AcfStage { ACF_STAGE_LINEARIZE = 0, ACF_STAGE_PASS1, ACF_STAGE_SYNC, ACF_STAGE_PASS2,
+                    ACF_STAGE_REFINE, ACF_STAGE_ACCENT, ACF_STAGE_UPDATE, ACF_STAGE_COUNT };
+    uint32_t getAcfStageUs(int stage) const { return acfStageCost_[stage].mean; }
+    uint32_t getAcfStageMaxUs(int stage) const { return acfStageCost_[stage].maxClosed; }
+
+#ifdef BLINKY_HOST_HARNESS
+    // Test hook (tests/tracker, ACF equivalence): each tempo decision when it is applied, with
+    // the analysis snapshot it was computed from (linearized, mean-subtracted sources; valid
+    // until the next snapshot), so a test can recompute it with the old batch code.
+    struct AcfTrace {
+        const float* sources[3];
+        int counts[3];
+        uint32_t snapFrame;      // frame the snapshot was taken (old code decided here)
+        uint32_t applyFrame;     // frame the decision was applied
+        bool valid;              // false: no candidate (period and phase kept)
+        int period;
+        float periodF;
+        float accentBin;
+        float snapTargetPhase;   // phase target at snapFrame (before the elapsed-frame shift)
+        int source;
+        int multiplier;
+        float strength;
+    };
+    using AcfTraceHook = void (*)(void* ctx, const AcfTrace& trace);
+    void setAcfTraceHook(AcfTraceHook hook, void* ctx) { acfTraceHook_ = hook; acfTraceCtx_ = ctx; }
+#endif
 
     // Alias for JSON audio stream ("onset" field)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
@@ -393,6 +428,75 @@ private:
 
     // Epoch-fold linearized buffer (raw, not mean-subtracted — for pattern extraction)
     float epochFoldLinear_[OSS_BUFFER_SIZE] = {0};
+
+    // === Incremental ACF (SlidingAcf.h) ===
+    // Exact running lag products of the three rhythm sources over the OSS window, updated
+    // every frame. The decision reads them instead of recomputing the ACF from scratch.
+    // Lags read: pass 1 up to ACF_MAX_LAG + ACF_STEP, syncopation bar lags up to
+    // MAX_PATTERN_LEN, refinement up to count/2 + ACF_REFINE_MAX_K/2 + 1 (long-lag window
+    // and its parabola neighbour).
+    static constexpr int ACF_REFINE_MAX_K = 12;
+    static constexpr int ACF_TABLE_MAX_LAG = OSS_BUFFER_SIZE / 2 + ACF_REFINE_MAX_K / 2 + 2;
+    static_assert(ACF_TABLE_MAX_LAG >= MAX_PATTERN_LEN + 3, "table must cover the syncopation and bar-refine lags");
+    // Pushes the table may be held for: from a snapshot to the refinement that reads it
+    // (<= 4 frames, see runAcfJob) plus the catch-up after it.
+    static constexpr int ACF_TABLE_SLACK = 16;
+    using RhythmAcf = SlidingAcf<OSS_BUFFER_SIZE, ACF_TABLE_MAX_LAG, ACF_TABLE_SLACK>;
+    RhythmAcf acfTable_[3];                       // 0 = bass flux (OSS), 1 = bass energy, 2 = mic level
+    // Window head/tail sums of one source (RhythmAcf::prefixSums), cached per decision.
+    int64_t acfHead_[ACF_TABLE_MAX_LAG + 1] = {};
+    int64_t acfTail_[ACF_TABLE_MAX_LAG + 1] = {};
+    int acfPrefixSrc_ = -1;
+    int acfPrefixMaxLag_ = -1;
+    double acfSumOverN2_ = 0.0;
+
+    // === Tempo decision, spread over one acfPeriodMs cycle (runAcfJob) ===
+    // Frame 0 snapshots the sources (linearized, mean-subtracted) and the ACF tables, and
+    // runs pass 1 + candidate generation; pass 2 scores the candidates across the next
+    // frames; then refinement + accent fold decide and apply; then PLP. Every step reads
+    // the snapshot, so the decision is the one the old inline code made at frame 0; it is
+    // applied a few frames later with the phase target moved on by the frames elapsed.
+    struct AcfCandidate {
+        float acfStrength;
+        int period;
+        int source;
+        int multiplier;   // 1=beat, 2/3/4=bar-level
+        bool derived;     // syncopation-derived (#166): score scaled by syncopatedCandidateScale
+    };
+    static constexpr int ACF_TOP_N = 5;
+    static constexpr int ACF_NUM_MULTIPLIERS = 4;
+    static constexpr int ACF_SYNC_FRACS = 2;
+    static constexpr int ACF_SYNC_MULTS = 2;
+    static constexpr int ACF_MAX_CANDIDATES = ACF_TOP_N * (ACF_NUM_MULTIPLIERS + ACF_SYNC_FRACS * ACF_SYNC_MULTS);
+    static constexpr int ACF_MAX_PASS2_GROUPS = 3;
+    AcfCandidate acfCands_[ACF_MAX_CANDIDATES] = {};
+    int acfNumCands_ = 0;
+    int acfNextCand_ = 0;
+    // Pass 2 running best
+    float acfBestScore_ = -1.0f;
+    float acfBestStrength_ = 0.0f;
+    float acfBestAccentBin_ = 0.0f;
+    int acfBestPeriod_ = 0;
+    int acfBestSource_ = 0;
+    int acfBestMultiplier_ = 1;
+    bool acfBestDerived_ = false;
+    // Snapshot
+    int acfSnapCount_[3] = {0, 0, 0};
+    float acfSnapLevelEnv_ = 0.0f;
+    uint32_t acfSnapFrame_ = 0;
+    // Job schedule (frame offsets from the snapshot frame; see runAcfJob)
+    bool acfJobActive_ = false;
+    bool acfJobDecided_ = false;   // refinement done: the tables may move again
+    int acfJobOffset_ = 0;
+    int acfJobGroups_ = 1;
+    int acfJobPeriodFrames_ = 1;
+    float acfJobPhaseFrames_ = 0.0f;  // phase time (frames) elapsed since the snapshot frame
+    uint32_t acfJobPass2Us_ = 0;
+    uint32_t acfJobUs_ = 0;         // this decision's ACF work so far (acfCost_)
+#ifdef BLINKY_HOST_HARNESS
+    AcfTraceHook acfTraceHook_ = nullptr;
+    void* acfTraceCtx_ = nullptr;
+#endif
     uint32_t lastFrameEndSampleIdx_ = 0;  // See getLastFrameEndSampleIdx()
     bool haveFrameEnd_ = false;           // lastFrameEndSampleIdx_ is a real frame end (PhaseClock)
 
@@ -437,6 +541,8 @@ private:
     };
     CostWindow acfCost_;
     CostWindow plpCost_;
+    CostWindow acfSliceCost_;
+    CostWindow acfStageCost_[ACF_STAGE_COUNT];
 
 
     // === Pattern slot cache (v82) ===
@@ -468,7 +574,14 @@ private:
     void processFrame(bool mayRunExpensive, float elapsedFrames);
     void addOssSample(float ungatedFlux);
     void addBassSample(float bassEnergy);
-    void runAcf();
+    void pushRhythmSample(int src, float x);    // incremental ACF table (deferred apply)
+    float acfCentered(int src, int lag);         // mean-subtracted lag sum of the snapshot window
+    const float* acfSource(int src) const;       // linearized, mean-subtracted snapshot of a source
+    void acfSnapshot(int periodFrames);          // frame 0: linearize, pass 1, candidates
+    void acfScoreCandidates(int end);            // pass 2 for candidates [acfNextCand_, end)
+    void acfDecide();                            // refinement, accent fold, apply period + phase
+    void runAcfJob(bool finishAll);              // the steps due at this frame offset
+    bool acfPlpDue() const;                      // PLP runs in this frame's job step
     float pickOnset(const OnsetEvidence& ev, const OnsetDetectorParams& params);  // One frame; returns onset strength (0 = none)
     OnsetDetectorParams detectorParams() const;
     void updatePlpAnalysis();       // Epoch-fold + bass ACF + cross-correlate (ACF cadence)
