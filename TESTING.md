@@ -37,7 +37,8 @@ Run these against test devices, not installed fleet devices.
 
 ```bash
 # BLINKY_TESTBOX_URL is the test box's blinky-server, from ~/.config/blinky/hosts.env
-# (load it with: set -a; . ~/.config/blinky/hosts.env; set +a)
+# (read just that key, never source the file:
+#  BLINKY_TESTBOX_URL="$(sed -n 's/^BLINKY_TESTBOX_URL=//p' ~/.config/blinky/hosts.env | tail -n 1)")
 # Run validation suite (all tracks, single device)
 curl -X POST "$BLINKY_TESTBOX_URL/api/test/validate" \
   -H 'Content-Type: application/json' \
