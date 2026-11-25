@@ -119,13 +119,16 @@ def tracked_files(root: Path) -> list[str]:
     return [p for p in out.decode().split("\0") if p]
 
 
+def plain_case(text: str) -> bool:
+    """Host names are written lowercase (or Capitalized, or in caps); CamelCase is code."""
+    return text.islower() or text.isupper() or (text[:1].isupper() and text[1:].islower())
+
+
 def name_hits(line: str, private: set[str]) -> list[str]:
     hits = []
-    low = line.lower()
     for m in TOKEN.finditer(line):
         tok = m.group(0)
-        # Host names are written lowercase (or Capitalized, or in caps); CamelCase is code.
-        if not (tok.islower() or tok.isupper() or tok[:1].isupper() and tok[1:].islower()):
+        if not plain_case(tok):
             continue
         parts = tok.lower().split("-")[:8]
         for i in range(len(parts)):
@@ -134,8 +137,9 @@ def name_hits(line: str, private: set[str]) -> list[str]:
                 if len(cand) in NAME_LENGTHS and name_hash(cand) in KNOWN_NAME_HASHES:
                     hits.append("name")
     for name in private:
-        if re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", low):
-            hits.append("private")
+        for m in re.finditer(rf"(?<![\w-]){re.escape(name)}(?![\w-])", line, re.IGNORECASE):
+            if plain_case(m.group(0)):
+                hits.append("private")
     return hits
 
 
