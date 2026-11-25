@@ -594,6 +594,17 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(audioCtrl_->getSpectral().getOnsetUs());
             out_.print(F(",\"onsetMaxUs\":"));
             out_.print(audioCtrl_->getSpectral().getOnsetMaxUs());
+            // ACF tempo + PLP pattern cost per run (every acfPeriodMs, inline in the audio
+            // update), mean and max over the last closed 5 s window: a long run stretches the
+            // loop iteration it lands in, which maxFrameMs shows but cannot attribute.
+            out_.print(F(",\"acfUs\":"));
+            out_.print(audioCtrl_->getAcfUs());
+            out_.print(F(",\"acfMaxUs\":"));
+            out_.print(audioCtrl_->getAcfMaxUs());
+            out_.print(F(",\"plpUs\":"));
+            out_.print(audioCtrl_->getPlpUs());
+            out_.print(F(",\"plpMaxUs\":"));
+            out_.print(audioCtrl_->getPlpMaxUs());
         }
 
         // Main-loop fps + frame-time range (#137). The publicly-readable

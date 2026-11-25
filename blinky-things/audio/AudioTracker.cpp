@@ -305,13 +305,16 @@ void AudioTracker::processFrame(bool mayRunExpensive, float elapsedFrames) {
     if (acfPeriodFrames < 1) acfPeriodFrames = 1;
     if (framesSinceAcf_ >= acfPeriodFrames && ossCount_ >= 100) {
         framesSinceAcf_ = 0;
-        uint32_t t0 = time_.millis();
+        const uint32_t t0 = time_.micros();
         runAcf();
-        uint32_t t1 = time_.millis();
+        const uint32_t t1 = time_.micros();
         updatePlpAnalysis();
-        uint32_t t2 = time_.millis();
-        lastAcfDurationMs_ = t1 - t0;  // Profile: ACF only
-        lastPlpMs_ = t2 - t1;          // Profile: PLP analysis only
+        const uint32_t t2 = time_.micros();
+        lastAcfDurationMs_ = (t1 - t0) / 1000;  // Profile: ACF only ([FPS] log)
+        lastPlpMs_ = (t2 - t1) / 1000;          // Profile: PLP analysis only
+        const uint32_t nowMs = time_.millis();
+        acfCost_.add(t1 - t0, nowMs);
+        plpCost_.add(t2 - t1, nowMs);
     }
 
     if (frameHook_) frameHook_(frameHookCtx_);
