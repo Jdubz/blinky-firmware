@@ -24,8 +24,8 @@
  * halted at most CHUNK_WORDS * 41 us (tWRITE max) per operation, and the
  * caller (the low-priority writer task) waits for each completion event.
  * Completion events reach this backend through
- * __wrap_flash_nrf5x_event_cb (scripts/build.sh links with
- * -Wl,--wrap=flash_nrf5x_event_cb): Bluefruit's SoC task hands every flash
+ * __wrap_flash_nrf5x_event_cb (every build links with
+ * -Wl,--wrap=flash_nrf5x_event_cb, scripts/arduino_env.sh): Bluefruit's SoC task hands every flash
  * event to the core's InternalFS handler, whose semaphore must only count
  * the core's own operations.
  */

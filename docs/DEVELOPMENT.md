@@ -209,7 +209,7 @@ save                # Persist to flash
 - a save appends a delta record (the changed bytes) in chunks of 8 words, each halting the CPU at most 8 × 41 µs (`tWRITE`);
 - erases happen at boot, before the first frame: the journal keeps its current page and erases the others, leaving room for hundreds of saves per session (683 single-setting saves in the unit test). Only past that does a save erase a page, logged as a warning;
 - `/config.bin` (LittleFS) stays as a copy, refreshed at boot when it differs, for older firmware after a downgrade and as the fallback. A `/config.bin` changed since (an older firmware wrote it) wins over the journal;
-- the journal takes its own flash completion events from Bluefruit's SoC task (`build.sh` links with `-Wl,--wrap=flash_nrf5x_event_cb`), so the core's InternalFS semaphore counts only its own operations.
+- the journal takes its own flash completion events from Bluefruit's SoC task (every build links with `-Wl,--wrap=flash_nrf5x_event_cb`, set once in `scripts/arduino_env.sh`), so the core's InternalFS semaphore counts only its own operations.
 
 `storage` prints the journal's state (current page, free bytes, erases at boot and since, flash operations, where this boot's settings came from). On the test box (2026-11-26), windows holding a save measured `maxFrameMs` 15–19 ms, the same as windows without one (before: 115–119 ms), including 260 saves in a row that rotated the journal to its next page without an erase.
 

@@ -147,11 +147,8 @@ if $OTA_BENCH_KEY; then
     COMPILE_ARGS+=(--build-property "compiler.cpp.extra_flags=-DBLINKY_OTA_BENCH_KEY")
 fi
 if ! $ESP32; then
-    # The settings journal (blinky-things/config/NrfJournalFlash.h, #49) takes
-    # its own flash completion events from Bluefruit's SoC task before the
-    # core's InternalFS handler sees them. Without this flag the link fails
-    # (__real_flash_nrf5x_event_cb is undefined), so it can't be left out.
-    COMPILE_ARGS+=(--build-property "compiler.c.elf.extra_flags=-Wl,--wrap=flash_nrf5x_event_cb")
+    # The settings journal's link flag (scripts/arduino_env.sh, #49).
+    COMPILE_ARGS+=(--build-property "$BLINKY_ELF_FLAGS_PROPERTY")
 fi
 if $FINGERPRINT; then
     COMPILE_ARGS+=(--build-path "$FP_DIR/build" --build-cache-path "$FP_DIR/cache")
