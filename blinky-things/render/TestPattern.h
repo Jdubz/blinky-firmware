@@ -12,6 +12,8 @@
  * pattern is active it replaces the generator and effect output in the pixel
  * matrix; the renderer and LEDMapper still run, so a logical (x, y) lights the
  * LED the generators would light there (orientation is exercised, not bypassed).
+ * The test box's blocking lights check walks the pixels with it (blinky_time
+ * docs/TEST_BOX.md, "Hardware checks").
  *
  *   SOLID  every pixel one colour: levels, LED PWM.
  *   PIXEL  one pixel lit, the rest dark: region map, orientation, dead LEDs.
