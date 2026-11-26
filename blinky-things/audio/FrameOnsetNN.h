@@ -25,6 +25,7 @@
 // ============================================================================
 
 #include <Arduino.h>  // Serial, F(), micros(): self-contained, also for host NN builds (#203)
+#include "../inputs/SerialOut.h"  // BLINKY_SERIAL: run-time logs (#23)
 #include <TensorFlowLite.h>
 #include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
@@ -343,7 +344,7 @@ public:
             // otherwise look like quiet content. Log first occurrence so the
             // failure shows up in serial without spamming.
             if (invokeErrors_ == 0) {
-                Serial.println(F("[ERROR] FrameOnsetNN: TFLite Invoke() failed (first occurrence)"));
+                BLINKY_SERIAL.println(F("[ERROR] FrameOnsetNN: TFLite Invoke() failed (first occurrence)"));
             }
             invokeErrors_++;
             return 0.0f;
@@ -355,14 +356,14 @@ public:
             // Profiling output goes to Serial directly — this runs in the
             // hot audio path (~62.5 Hz) and cannot take a Print& parameter.
             // Profile data is developer-only and not routed to BLE/WiFi.
-            Serial.print(F("[NNPROF] cnt="));
-            Serial.print(inferCount_);
-            Serial.print(F(" infer="));
-            Serial.print(lastInferUs_);
-            Serial.print(F("us arena="));
-            Serial.print(arenaUsed_);
-            Serial.print(F("/"));
-            Serial.println(ARENA_SIZE);
+            BLINKY_SERIAL.print(F("[NNPROF] cnt="));
+            BLINKY_SERIAL.print(inferCount_);
+            BLINKY_SERIAL.print(F(" infer="));
+            BLINKY_SERIAL.print(lastInferUs_);
+            BLINKY_SERIAL.print(F("us arena="));
+            BLINKY_SERIAL.print(arenaUsed_);
+            BLINKY_SERIAL.print(F("/"));
+            BLINKY_SERIAL.println(ARENA_SIZE);
         }
 
         // Extract onset output

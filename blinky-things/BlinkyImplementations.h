@@ -60,6 +60,7 @@
 #include "inputs/AdaptiveMic.cpp"
 #include "inputs/BatteryMonitor.cpp"
 #include "inputs/IMUHelper.cpp"     // Stub mode without LSM6DS3; define IMU_ENABLED to activate
+#include "inputs/SerialOut.cpp"     // Non-blocking USB serial output (#23)
 #include "inputs/SerialConsole.cpp"
 
 // Configuration implementations

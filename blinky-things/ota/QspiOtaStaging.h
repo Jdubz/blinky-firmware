@@ -31,6 +31,7 @@
 
 #ifdef ARDUINO_ARCH_NRF52
 
+#include "../inputs/SerialOut.h"
 #include <Arduino.h>
 #include "../hal/SafeBootWatchdog.h"
 #include "../types/Version.h"
@@ -497,6 +498,7 @@ public:
 
         out.print(F("OK ota applying build="));
         out.println(manifest_.build);
+        BLINKY_SERIAL.flush();  // the reply out of SerialOut's ring (#23)
         delay(100);  // let the reply leave over USB CDC / BLE before the reset
         // Dual-path apply request, as SerialConsole's `bootloader` command:
         // RAM at 0x20007F7C survives the reset but a Windows USB hub

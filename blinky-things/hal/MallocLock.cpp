@@ -42,6 +42,7 @@
  */
 
 #include "MallocLock.h"
+#include "../inputs/SerialOut.h"  // BLINKY_SERIAL: run-time logs (#23)
 
 #ifdef BLINKY_PLATFORM_NRF52840
 
@@ -79,9 +80,9 @@ void reportIsrAllocs() {
     static bool logged = false;
     if (!logged && MallocLock_isrAllocCount != 0) {
         logged = true;
-        Serial.print(F("[ERROR] MallocLock: heap allocation from an ISR ("));
-        Serial.print(MallocLock_isrAllocCount);
-        Serial.println(F(" so far) - not protected by the heap lock; see json info mallocIsr"));
+        BLINKY_SERIAL.print(F("[ERROR] MallocLock: heap allocation from an ISR ("));
+        BLINKY_SERIAL.print(MallocLock_isrAllocCount);
+        BLINKY_SERIAL.println(F(" so far) - not protected by the heap lock; see json info mallocIsr"));
     }
 }
 
