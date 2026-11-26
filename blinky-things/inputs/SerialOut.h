@@ -58,7 +58,7 @@ public:
     size_t write(uint8_t c) override { return write(&c, 1); }
     size_t write(const uint8_t* data, size_t size) override;
     int availableForWrite() override;
-    void flush() override;  // wait (bounded) until the ring is in the FIFO
+    void flush();  // wait (bounded) until the ring is in the FIFO (Print has no virtual flush here)
 
     // Room for a line of `len` bytes right now. False: the host isn't
     // draining, and the caller skips the line and calls lineDropped().
