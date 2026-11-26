@@ -63,6 +63,8 @@
 #include "inputs/SerialConsole.cpp"
 
 // Configuration implementations
+#include "config/SettingsJournal.cpp"   // Erase-free settings saves (#49)
+#include "config/NrfJournalFlash.cpp"   // Its nRF52840 flash (SoftDevice API)
 #include "config/ConfigStorage.cpp"     // Persistent settings storage
 #include "config/DeviceConfigLoader.cpp"  // v28: Runtime device config loading
 #include "config/SettingsRegistry.cpp"  // Settings abstraction layer

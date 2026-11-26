@@ -9,66 +9,66 @@
 
 namespace {
 // The one journal operation in flight (the writer task's, or setup()'s).
-volatile bool g_inflight = false;
-volatile uint32_t g_event = 0;
-SemaphoreHandle_t g_done = nullptr;
-// What the in-flight operation leaves on flash: g_src words at g_addr, or
-// (g_src null) g_words erased words.
-volatile uint32_t g_addr = 0;
-const uint32_t* volatile g_src = nullptr;
-volatile uint32_t g_words = 0;
-uint32_t g_ops = 0;
-uint32_t g_retries = 0;
+volatile bool jf_inflight = false;
+volatile uint32_t jf_event = 0;
+SemaphoreHandle_t jf_done = nullptr;
+// What the in-flight operation leaves on flash: jf_src words at jf_addr, or
+// (jf_src null) jf_words erased words.
+volatile uint32_t jf_addr = 0;
+const uint32_t* volatile jf_src = nullptr;
+volatile uint32_t jf_words = 0;
+uint32_t jf_ops = 0;
+uint32_t jf_retries = 0;
 
-bool landed() {
-    const uint32_t* p = reinterpret_cast<const uint32_t*>(g_addr);
-    if (g_src != nullptr) return memcmp(p, g_src, g_words * 4) == 0;
-    for (uint32_t i = 0; i < g_words; i++) {
+bool journalOpLanded() {
+    const uint32_t* p = reinterpret_cast<const uint32_t*>(jf_addr);
+    if (jf_src != nullptr) return memcmp(p, jf_src, jf_words * 4) == 0;
+    for (uint32_t i = 0; i < jf_words; i++) {
         if (p[i] != 0xFFFFFFFFu) return false;
     }
     return true;
 }
 
-uint32_t issue() {
-    if (g_src == nullptr) return sd_flash_page_erase(g_addr / NrfJournalFlash::PAGE);
-    return sd_flash_write(reinterpret_cast<uint32_t*>(g_addr), g_src, g_words);
+uint32_t journalOpIssue() {
+    if (jf_src == nullptr) return sd_flash_page_erase(jf_addr / NrfJournalFlash::PAGE);
+    return sd_flash_write(reinterpret_cast<uint32_t*>(jf_addr), jf_src, jf_words);
 }
 
 // One erase or write, completed and verified.
-bool runOp(uint32_t addr, const uint32_t* src, uint32_t words) {
-    if (g_done == nullptr) {
-        g_done = xSemaphoreCreateBinary();
-        if (g_done == nullptr) {
+bool journalRunOp(uint32_t addr, const uint32_t* src, uint32_t words) {
+    if (jf_done == nullptr) {
+        jf_done = xSemaphoreCreateBinary();
+        if (jf_done == nullptr) {
             SerialConsole::logError(F("settings journal: no semaphore for flash events"));
             return false;
         }
     }
     for (int attempt = 0; attempt < 5; attempt++) {
-        g_addr = addr;
-        g_src = src;
-        g_words = words;
+        jf_addr = addr;
+        jf_src = src;
+        jf_words = words;
         uint8_t sd = 0;
         (void)sd_softdevice_is_enabled(&sd);
         if (!sd) {
             // Before Bluefruit.begin(): the SoftDevice API runs it now.
-            const uint32_t err = issue();
-            g_ops++;
+            const uint32_t err = journalOpIssue();
+            jf_ops++;
             if (err != NRF_SUCCESS) {
                 SerialConsole::logError(F("settings journal: flash operation refused (SoftDevice off)"));
                 return false;
             }
-            return landed();
+            return journalOpLanded();
         }
-        xSemaphoreTake(g_done, 0);  // drop a stale completion
-        g_inflight = false;
+        xSemaphoreTake(jf_done, 0);  // drop a stale completion
+        jf_inflight = false;
         const uint32_t t0 = millis();
         uint32_t err;
         for (;;) {
             // The SoC task must not see this operation's event before
-            // g_inflight says it's ours, or it goes to the core's waiter.
+            // jf_inflight says it's ours, or it goes to the core's waiter.
             vTaskSuspendAll();
-            err = issue();
-            if (err == NRF_SUCCESS) g_inflight = true;
+            err = journalOpIssue();
+            if (err == NRF_SUCCESS) jf_inflight = true;
             xTaskResumeAll();
             if (err != NRF_ERROR_BUSY) break;  // BUSY: the core's own flash operation is pending
             if (millis() - t0 > 10000) break;
@@ -78,20 +78,20 @@ bool runOp(uint32_t addr, const uint32_t* src, uint32_t words) {
             SerialConsole::logError(F("settings journal: SoftDevice refused the flash operation"));
             return false;
         }
-        g_ops++;
-        if (xSemaphoreTake(g_done, pdMS_TO_TICKS(30000)) != pdTRUE) {
-            // g_inflight stays set: a late event is still claimed here.
+        jf_ops++;
+        if (xSemaphoreTake(jf_done, pdMS_TO_TICKS(30000)) != pdTRUE) {
+            // jf_inflight stays set: a late event is still claimed here.
             SerialConsole::logError(F("settings journal: no flash completion event in 30 s"));
             return false;
         }
-        if (g_event == NRF_EVT_FLASH_OPERATION_SUCCESS) {
-            if (landed()) return true;
+        if (jf_event == NRF_EVT_FLASH_OPERATION_SUCCESS) {
+            if (journalOpLanded()) return true;
             SerialConsole::logError(F("settings journal: flash readback mismatch"));
             return false;
         }
         // NRF_EVT_FLASH_OPERATION_ERROR: no room between radio events this
         // time (S140 SDS, Flash memory API: retry).
-        g_retries++;
+        jf_retries++;
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     SerialConsole::logError(F("settings journal: flash operation failed 5 times"));
@@ -105,10 +105,10 @@ extern "C" void __wrap_flash_nrf5x_event_cb(uint32_t event) {
     // A SUCCESS counts as ours only once our data is on flash: a core
     // operation that completed just before ours was issued has its event
     // still queued, and it must reach the core.
-    if (g_inflight && (event != NRF_EVT_FLASH_OPERATION_SUCCESS || landed())) {
-        g_event = event;
-        g_inflight = false;
-        xSemaphoreGive(g_done);
+    if (jf_inflight && (event != NRF_EVT_FLASH_OPERATION_SUCCESS || journalOpLanded())) {
+        jf_event = event;
+        jf_inflight = false;
+        xSemaphoreGive(jf_done);
         return;
     }
     __real_flash_nrf5x_event_cb(event);
@@ -138,18 +138,18 @@ bool NrfJournalFlash::usable() {
 
 bool NrfJournalFlash::erasePage(uint32_t page) {
     if (page >= PAGES) return false;
-    return runOp(BASE + page * PAGE, nullptr, PAGE / 4);
+    return journalRunOp(BASE + page * PAGE, nullptr, PAGE / 4);
 }
 
 bool NrfJournalFlash::program(uint32_t off, const uint32_t* words, uint32_t nWords) {
     if ((off & 3u) != 0 || off + nWords * 4 > PAGES * PAGE) return false;
     for (uint32_t i = 0; i < nWords; i += CHUNK_WORDS) {
         const uint32_t n = (nWords - i < CHUNK_WORDS) ? nWords - i : CHUNK_WORDS;
-        if (!runOp(BASE + off + i * 4, words + i, n)) return false;
+        if (!journalRunOp(BASE + off + i * 4, words + i, n)) return false;
     }
     return true;
 }
 
-uint32_t NrfJournalFlash::ops() { return g_ops; }
-uint32_t NrfJournalFlash::retries() { return g_retries; }
+uint32_t NrfJournalFlash::ops() { return jf_ops; }
+uint32_t NrfJournalFlash::retries() { return jf_retries; }
 #endif
