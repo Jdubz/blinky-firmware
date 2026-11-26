@@ -41,6 +41,9 @@ static SettingsJournal* journal = nullptr;
 // /config.bin as read at boot: bytes and CRC (0 bytes: missing/unreadable).
 static uint32_t bootFileLen = 0;
 static uint32_t bootFileCrc = 0;
+// Where this boot's settings came from, and the journal's erases at boot.
+static const char* bootSource = "defaults";
+static uint32_t bootErases = 0;
 // Flash storage for ESP32-S3 via NVS (Non-Volatile Storage) Preferences API
 #elif defined(ESP32)
 #include <Preferences.h>
@@ -463,6 +466,7 @@ bool ConfigStorage::loadFromFlash() {
         configFile->close();
         bootFileLen = bytesRead;
         bootFileCrc = SettingsJournal::crc32(0, reinterpret_cast<const uint8_t*>(&temp), bytesRead);
+        bootSource = "config.bin";
     }
 
     // The journal (#49) holds every save since the last boot; /config.bin
@@ -481,6 +485,7 @@ bool ConfigStorage::loadFromFlash() {
             memcpy(&temp, journal->state(), n);
             bytesRead = n;
             SerialConsole::logDebug(F("Config loaded from the settings journal"));
+            bootSource = "journal";
         }
     }
 
@@ -738,13 +743,8 @@ void ConfigStorage::prepareJournal() {
     if (wm) xSemaphoreGive(wm);
     lastWrittenCrc_ = crc;
     lastWrittenValid_ = true;
-    Serial.print(F("[INFO] settings journal: page "));
-    Serial.print(journal->currentPage());
-    Serial.print(F(", "));
-    Serial.print(journal->freeBytes());
-    Serial.print(F(" bytes free, "));
-    Serial.print(journal->eraseCount());
-    Serial.println(F(" erases at boot"));
+    bootErases = journal->eraseCount();
+    printStorageStatus(Serial);
 }
 
 bool ConfigStorage::writeNow(const ConfigData& d) {
@@ -775,6 +775,29 @@ bool ConfigStorage::writeNow(const ConfigData& d) {
     if (!done) ok = writeConfigFile(bytes, sizeof(ConfigData));
     if (wm) xSemaphoreGive(wm);
     return ok;
+}
+
+void ConfigStorage::printStorageStatus(Print& out) const {
+    if (journal == nullptr) {
+        out.println(F("storage: /config.bin (settings journal off: saves erase flash and stall the loop, #49)"));
+        return;
+    }
+    out.print(F("storage: journal page "));
+    out.print(journal->currentPage());
+    out.print(F(", "));
+    out.print(journal->freeBytes());
+    out.print(F(" B free, erases "));
+    out.print(bootErases);
+    out.print(F(" at boot / "));
+    out.print(journal->eraseCount() - bootErases);
+    out.print(F(" since, flash ops "));
+    out.print(NrfJournalFlash::ops());
+    out.print(F(" (retried "));
+    out.print(NrfJournalFlash::retries());
+    out.print(F("), loaded from "));
+    out.print(bootSource);
+    out.print(F(", config.bin copy "));
+    out.println(journal->hasSync() ? F("synced") : F("not synced"));
 }
 
 void ConfigStorage::writerMain(void* arg) {
@@ -828,6 +851,10 @@ void ConfigStorage::startWriter() {
         return;
     }
     writerTask_ = h;
+}
+#else
+void ConfigStorage::printStorageStatus(Print& out) const {
+    out.println(F("storage: this platform's default (no settings journal)"));
 }
 #endif
 

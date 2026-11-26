@@ -428,6 +428,9 @@ public:
     // true where saves are synchronous.
     bool flushPendingSave(uint32_t timeoutMs = 3000);
     bool isValid() const { return valid_; }
+    // One line: where settings persist and how (journal page, free bytes,
+    // erases, flash operations; or the /config.bin fallback). #49.
+    void printStorageStatus(Print& out) const;
 
     // Device configuration accessors (v28+)
     const StoredDeviceConfig& getDeviceConfig() const { return data_.device; }
