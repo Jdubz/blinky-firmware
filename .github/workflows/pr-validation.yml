@@ -220,9 +220,12 @@ jobs:
     # exact ties at every precision, signed zero, millions of random floats.
     - name: Stream float formatting (UBSan)
       run: |
-        g++ -std=c++17 -Wall -Wextra -Werror -O1 -g -fsanitize=undefined -fno-sanitize-recover=all \
-          -I blinky-things tests/unit/test_fixed_float.cpp -o build/test_fixed_float
-        build/test_fixed_float
+        # -Ofast too: the firmware core builds with it (-ffinite-math-only, -fno-signed-zeros).
+        for opt in -O1 -Ofast; do
+          g++ -std=c++17 -Wall -Wextra -Werror $opt -g -fsanitize=undefined -fno-sanitize-recover=all \
+            -I blinky-things tests/unit/test_fixed_float.cpp -o build/test_fixed_float
+          build/test_fixed_float
+        done
 
   timing:
     # Quoted: unquoted, YAML reads ` #259-#261)` as a comment and the check is named "...phase,".

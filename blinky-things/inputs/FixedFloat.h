@@ -1,6 +1,6 @@
 #pragma once
 
-#include <math.h>
+#include <string.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -23,7 +23,8 @@
  * even, under the default rounding mode). The sign is printed whenever the
  * sign bit is set, as printf does ("-0.00" for -0.0 or -0.001).
  *
- * Covers finite |x| < 1e9 with digits <= 6; anything else returns 0 and the
+ * Covers finite |x| < 1e9 with digits <= 6; anything else (NaN and Inf
+ * included, which printf spells "nan"/"inf") returns 0 and the
  * caller falls back to Print's own formatting. tests/unit/test_fixed_float.cpp
  * compares it with the host's printf; the firmware's `selftest float`
  * compares it with the device's own newlib printf.
@@ -37,10 +38,18 @@ static constexpr size_t BUF_SIZE = 20;  // '-' + 10 integer digits + '.' + 6 + N
 // length, or 0 when x or digits is outside the fast path.
 inline size_t format(char* buf, float x, uint8_t digits) {
     static const double P10[MAX_DIGITS + 1] = {1.0, 10.0, 100.0, 1e3, 1e4, 1e5, 1e6};
-    if (digits > MAX_DIGITS || !isfinite(x)) return 0;
-    const bool neg = signbit(x);
-    const double a = neg ? -static_cast<double>(x) : static_cast<double>(x);
-    if (!(a < 1e9)) return 0;
+    // Sign, NaN and Inf from the bits: the core builds with -Ofast, whose
+    // -ffinite-math-only lets the compiler fold isfinite() to true and
+    // -fno-signed-zeros lets it drop the sign of -0.0.
+    uint32_t bits;
+    memcpy(&bits, &x, sizeof(bits));
+    if (digits > MAX_DIGITS || (bits & 0x7F800000u) == 0x7F800000u) return 0;  // NaN/Inf: printf's path
+    const bool neg = (bits & 0x80000000u) != 0;
+    bits &= 0x7FFFFFFFu;
+    float ax;
+    memcpy(&ax, &bits, sizeof(ax));
+    if (bits >= 0x4E6E6B28u) return 0;  // |x| >= 1e9 (0x4E6E6B28 is 1e9f)
+    const double a = static_cast<double>(ax);
     const double p = a * P10[digits];         // exact (see above)
     uint64_t q = static_cast<uint64_t>(p);     // floor: p >= 0
     const double frac = p - static_cast<double>(q);  // exact
