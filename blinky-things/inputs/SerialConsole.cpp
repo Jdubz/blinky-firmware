@@ -1997,6 +1997,7 @@ void SerialConsole::streamTick() {
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
         uint32_t fc = spectral.getFrameCount();
+        // cppcheck-suppress knownConditionTrueFalse  // always room off the nRF52840 (no SerialOut)
         if ((nnStreamFirst_ || fc != lastNNFrameCount_) && !streamRoom()) {
             // The host isn't draining: skip this frame's line, counted once.
             // lastNNFrameCount_ stays, so the next line's "skip" covers it.
@@ -2061,6 +2062,7 @@ void SerialConsole::streamTick() {
 
     // STATUS update at ~1Hz
     static uint32_t lastStatusMs = 0;
+    // cppcheck-suppress knownConditionTrueFalse  // always room off the nRF52840 (no SerialOut)
     if (mic_ && (now - lastStatusMs >= 1000) && !streamRoom()) {
         lastStatusMs = now;  // this second's STATUS line is skipped, counted
         streamLineDropped();
@@ -2081,6 +2083,7 @@ void SerialConsole::streamTick() {
     // Audio streaming at ~20Hz (normal) or ~100Hz (fast mode for testing)
     // Skip when NN-only stream is active (saves serial bandwidth for mel bands)
     uint16_t period = streamFast_ ? STREAM_FAST_PERIOD_MS : STREAM_PERIOD_MS;
+    // cppcheck-suppress knownConditionTrueFalse  // always room off the nRF52840 (no SerialOut)
     if (streamEnabled_ && mic_ && (now - streamLastMs_ >= period) && !streamRoom()) {
         streamLastMs_ = now;  // this period's line is skipped, counted
         streamLineDropped();
@@ -2279,6 +2282,7 @@ void SerialConsole::streamTick() {
     }
 
     // Battery streaming at ~1Hz
+    // cppcheck-suppress knownConditionTrueFalse  // always room off the nRF52840 (no SerialOut)
     if (battery_ && (now - batteryLastMs_ >= BATTERY_PERIOD_MS) && !streamRoom()) {
         batteryLastMs_ = now;  // skipped, counted (#23)
         streamLineDropped();
