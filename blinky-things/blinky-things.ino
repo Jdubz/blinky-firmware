@@ -729,6 +729,12 @@ void setup() {
 
   Serial.print(F("[BOOT] Watchdog active, boot attempt #"));
   Serial.println(SafeBootWatchdog::getBootCount());
+#if BLINKY_SERIAL_OUT
+  // From here on the console, the stream and run-time logs write through a
+  // RAM ring that a low-priority task feeds to USB: the loop never waits on
+  // the host (#23). Last, so setup()'s own output keeps its order.
+  SerialOut::instance().begin();
+#endif
 }
 
 void loop() {
@@ -752,7 +758,7 @@ void loop() {
     SafeBootWatchdog::clearBootAttemptCounter();
     stableMarked = true;
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
-      Serial.println(F("[BOOT] Marked stable (60s uptime) — boot-fail counter cleared"));
+      BLINKY_SERIAL.println(F("[BOOT] Marked stable (60s uptime) — boot-fail counter cleared"));
     }
   }
 
@@ -768,8 +774,9 @@ void loop() {
   if (generatorButton.poll()) {
     GeneratorButton::cycleGenerator(pipeline);
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
-      Serial.print(F("[BUTTON] Generator -> "));
-      Serial.println(pipeline->getGeneratorName());
+      LineBuffer line(BLINKY_SERIAL);
+      line.print(F("[BUTTON] Generator -> "));
+      line.println(pipeline->getGeneratorName());
     }
   }
 
@@ -796,17 +803,18 @@ void loop() {
       LoopMetrics::getLastWindowMs() != lastFpsLogMs &&
       LoopMetrics::getLastWindowMs() != 0) {
     lastFpsLogMs = LoopMetrics::getLastWindowMs();
-    Serial.print(F("[FPS] "));
-    Serial.print(LoopMetrics::getFps(), 1);
-    Serial.print(F(" fps  frame: "));
-    Serial.print(LoopMetrics::getMinFrameMs());
-    Serial.print(F("-"));
-    Serial.print(LoopMetrics::getMaxFrameMs());
-    Serial.print(F("ms  acf="));
-    Serial.print(audioController ? audioController->getLastAcfMs() : 0);
-    Serial.print(F("+"));
-    Serial.print(audioController ? audioController->getLastPlpMs() : 0);
-    Serial.println(F("ms"));
+    LineBuffer line(BLINKY_SERIAL);  // one write: a line can't be split (#23)
+    line.print(F("[FPS] "));
+    line.print(LoopMetrics::getFps(), 1);
+    line.print(F(" fps  frame: "));
+    line.print(LoopMetrics::getMinFrameMs());
+    line.print(F("-"));
+    line.print(LoopMetrics::getMaxFrameMs());
+    line.print(F("ms  acf="));
+    line.print(audioController ? audioController->getLastAcfMs() : 0);
+    line.print(F("+"));
+    line.print(audioController ? audioController->getLastPlpMs() : 0);
+    line.println(F("ms"));
   }
 
   // Frame time diagnostics: only warn for unexpectedly long frames.
@@ -815,9 +823,10 @@ void loop() {
   // Only warn when frame time exceeds 200ms (indicates actual performance issue).
   if (dt > 0.2f) {
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
-      Serial.print(F("[WARN] Frame time: "));
-      Serial.print((now - lastMs));
-      Serial.println(F("ms"));
+      LineBuffer line(BLINKY_SERIAL);
+      line.print(F("[WARN] Frame time: "));
+      line.print((now - lastMs));
+      line.println(F("ms"));
     }
   }
 
@@ -855,31 +864,34 @@ void loop() {
       // time so offline analysis can classify TPs vs FPs by gate state and
       // spectral signature without needing persist_raw signal_frame replay.
       const auto& pf = audioController->getLastPulseFeatures();
-      Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
-      Serial.print(now);
-      Serial.print(F(",\"strength\":"));
-      Serial.print(onsetStrength, 2);
-      Serial.print(F(",\"gateMask\":"));
-      Serial.print((unsigned int)audioController->getLastPulseGateMask());
-      Serial.print(F(",\"features\":{\"flat\":"));
-      Serial.print(pf.flatness, 3);
-      Serial.print(F(",\"rflux\":"));
-      Serial.print(pf.rawFlux, 3);
-      Serial.print(F(",\"cent\":"));
-      Serial.print(pf.centroid, 3);
-      Serial.print(F(",\"crest\":"));
-      Serial.print(pf.crest, 3);
-      Serial.print(F(",\"roll\":"));
-      Serial.print(pf.rolloff, 3);
-      Serial.print(F(",\"hfc\":"));
-      Serial.print(pf.hfc, 3);
-      Serial.print(F(",\"bassR\":"));
-      Serial.print(pf.bassRatio, 2);
-      Serial.print(F(",\"plpP\":"));
-      Serial.print(pf.plpPulse, 2);
-      Serial.print(F(",\"plpC\":"));
-      Serial.print(pf.plpConfidence, 2);
-      Serial.println(F("}}"));
+      // One write through the stream's path (#23): a line can't be split,
+      // and the floats skip printf (FixedFloat, same bytes).
+      LineBuffer line(BLINKY_SERIAL);
+      line.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
+      line.print(now);
+      line.print(F(",\"strength\":"));
+      line.printFloat(onsetStrength, 2);
+      line.print(F(",\"gateMask\":"));
+      line.print((unsigned int)audioController->getLastPulseGateMask());
+      line.print(F(",\"features\":{\"flat\":"));
+      line.printFloat(pf.flatness, 3);
+      line.print(F(",\"rflux\":"));
+      line.printFloat(pf.rawFlux, 3);
+      line.print(F(",\"cent\":"));
+      line.printFloat(pf.centroid, 3);
+      line.print(F(",\"crest\":"));
+      line.printFloat(pf.crest, 3);
+      line.print(F(",\"roll\":"));
+      line.printFloat(pf.rolloff, 3);
+      line.print(F(",\"hfc\":"));
+      line.printFloat(pf.hfc, 3);
+      line.print(F(",\"bassR\":"));
+      line.printFloat(pf.bassRatio, 2);
+      line.print(F(",\"plpP\":"));
+      line.printFloat(pf.plpPulse, 2);
+      line.print(F(",\"plpC\":"));
+      line.printFloat(pf.plpConfidence, 2);
+      line.println(F("}}"));
     }
   }
 

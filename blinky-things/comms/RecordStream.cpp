@@ -1,4 +1,5 @@
 #include "RecordStream.h"
+#include "../inputs/SerialOut.h"  // BLINKY_SERIAL: run-time logs (#23)
 #include "../audio/AudioTracker.h"
 #include "../audio/LoopMetrics.h"
 #include "../inputs/AdaptiveMic.h"
@@ -52,8 +53,8 @@ void RecordStream::begin(AudioTracker* audio, AdaptiveMic* mic) {
     // start() refuses) and say so — never half-register and carry on.
     err_t svcErr = service_.begin();
     if (svcErr != ERROR_NONE) {
-        Serial.print(F("[FALLBACK] Record service begin failed err=0x"));
-        Serial.println((unsigned)svcErr, HEX);
+        BLINKY_SERIAL.print(F("[FALLBACK] Record service begin failed err=0x"));
+        BLINKY_SERIAL.println((unsigned)svcErr, HEX);
         return;
     }
     dataChr_.setProperties(CHR_PROPS_NOTIFY);
@@ -61,8 +62,8 @@ void RecordStream::begin(AudioTracker* audio, AdaptiveMic* mic) {
     dataChr_.setMaxLen(MAX_PAYLOAD);
     err_t chrErr = dataChr_.begin();
     if (chrErr != ERROR_NONE) {
-        Serial.print(F("[FALLBACK] Record characteristic begin failed err=0x"));
-        Serial.println((unsigned)chrErr, HEX);
+        BLINKY_SERIAL.print(F("[FALLBACK] Record characteristic begin failed err=0x"));
+        BLINKY_SERIAL.println((unsigned)chrErr, HEX);
         return;
     }
 
@@ -71,7 +72,7 @@ void RecordStream::begin(AudioTracker* audio, AdaptiveMic* mic) {
     // The sender task (3 KB stack) and the 32 KB audio ring are created on
     // the first `record start`, so devices that never record keep their
     // boot-time heap exactly as before.
-    Serial.println(F("[BLE] Record service started"));
+    BLINKY_SERIAL.println(F("[BLE] Record service started"));
 }
 
 // ---------------------------------------------------------------------------
@@ -121,7 +122,7 @@ bool RecordStream::start(bool withMel, Print& out) {
         if (xTaskCreate(senderTaskEntry, "rec", 768, this, TASK_PRIO_LOW, &task_) != pdPASS) {
             task_ = nullptr;
             out.println(F("{\"error\":\"record sender task creation failed (out of heap)\"}"));
-            Serial.println(F("[FALLBACK] RecordStream sender task creation failed — record refused"));
+            BLINKY_SERIAL.println(F("[FALLBACK] RecordStream sender task creation failed — record refused"));
             return false;
         }
     }
@@ -129,7 +130,7 @@ bool RecordStream::start(bool withMel, Print& out) {
         ring_ = new (std::nothrow) int16_t[RING_SAMPLES];
         if (!ring_) {
             out.println(F("{\"error\":\"record ring allocation failed (out of heap)\"}"));
-            Serial.println(F("[FALLBACK] RecordStream: 32 KB ring allocation failed — record refused"));
+            BLINKY_SERIAL.println(F("[FALLBACK] RecordStream: 32 KB ring allocation failed — record refused"));
             return false;
         }
     }
@@ -206,7 +207,7 @@ bool RecordStream::start(bool withMel, Print& out) {
     out.print(F(",\"ring\":"));
     out.print(RING_SAMPLES);
     out.println(F("}"));
-    Serial.println(F("[REC] started"));
+    BLINKY_SERIAL.println(F("[REC] started"));
     return true;
 }
 
@@ -401,14 +402,14 @@ void RecordStream::finishLocked(const char* reason) {
     lastEndReason_ = reason;
     // Log before releasing the session: once active_ is false, start() may
     // reset these counters from another task.
-    Serial.print(F("[REC] ended: "));
-    Serial.print(reason);
-    Serial.print(F(" sent="));
-    Serial.print(audioSamplesSent_);
-    Serial.print(F(" dropped="));
-    Serial.print(audioSamplesDropped_);
-    Serial.print(F(" framesDropped="));
-    Serial.println(framesDropped_);
+    BLINKY_SERIAL.print(F("[REC] ended: "));
+    BLINKY_SERIAL.print(reason);
+    BLINKY_SERIAL.print(F(" sent="));
+    BLINKY_SERIAL.print(audioSamplesSent_);
+    BLINKY_SERIAL.print(F(" dropped="));
+    BLINKY_SERIAL.print(audioSamplesDropped_);
+    BLINKY_SERIAL.print(F(" framesDropped="));
+    BLINKY_SERIAL.println(framesDropped_);
     // active_ first: clearing stopRequested_ while active_ is still true
     // would briefly re-enable onLoop() production for a dead session.
     active_ = false;
@@ -446,7 +447,7 @@ void RecordStream::senderLoop() {
             backlog = OVERRUN_RESUME_BACKLOG;
             if (!overrunLogged) {
                 overrunLogged = true;
-                Serial.println(F("[FALLBACK] Record audio ring overrun — BLE link too slow, samples dropped (counted)"));
+                BLINKY_SERIAL.println(F("[FALLBACK] Record audio ring overrun — BLE link too slow, samples dropped (counted)"));
             }
         }
         if (backlog > ringHighWater_) ringHighWater_ = backlog;

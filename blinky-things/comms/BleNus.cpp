@@ -1,4 +1,5 @@
 #include "BleNus.h"
+#include "../inputs/SerialOut.h"  // BLINKY_SERIAL: run-time logs (#23)
 
 BleNus* BleNus::instance_ = nullptr;
 
@@ -23,7 +24,7 @@ void BleNus::begin() {
 
     // Advertising is started separately (startAdvertising) once the sketch
     // has registered all services.
-    Serial.println(F("[BLE] NUS peripheral started"));
+    BLINKY_SERIAL.println(F("[BLE] NUS peripheral started"));
 }
 
 void BleNus::startAdvertising() {
@@ -105,7 +106,7 @@ size_t BleNus::write(const uint8_t* data, size_t size) {
             txBytesDropped_ += (uint32_t)(size - i);
             if (!txDropLogged_) {
                 txDropLogged_ = true;
-                Serial.println(F("[FALLBACK] BleNus TX ring full — dropping output (see 'ble' tx_dropped)"));
+                BLINKY_SERIAL.println(F("[FALLBACK] BleNus TX ring full — dropping output (see 'ble' tx_dropped)"));
             }
             break;
         }
@@ -231,9 +232,9 @@ void BleNus::runQueuedCommands() {
     }
     const uint32_t dropped = cmdDropped_;
     if (dropped != cmdDroppedReported_) {
-        Serial.print(F("[BLE] NUS command queue full: "));
-        Serial.print(dropped - cmdDroppedReported_);
-        Serial.println(F(" line(s) dropped"));
+        BLINKY_SERIAL.print(F("[BLE] NUS command queue full: "));
+        BLINKY_SERIAL.print(dropped - cmdDroppedReported_);
+        BLINKY_SERIAL.println(F(" line(s) dropped"));
         cmdDroppedReported_ = dropped;
     }
 }
@@ -268,7 +269,7 @@ void BleNus::onConnect(uint16_t conn_hdl) {
         conn->requestMtuExchange(247);
     }
 
-    Serial.println(F("[BLE] NUS client connected"));
+    BLINKY_SERIAL.println(F("[BLE] NUS client connected"));
 }
 
 void BleNus::onDisconnect(uint16_t conn_hdl, uint8_t reason) {
@@ -281,8 +282,8 @@ void BleNus::onDisconnect(uint16_t conn_hdl, uint8_t reason) {
     instance_->txHead_ = 0;
     instance_->txTail_ = 0;
 
-    Serial.print(F("[BLE] NUS client disconnected, reason=0x"));
-    Serial.println(reason, HEX);
+    BLINKY_SERIAL.print(F("[BLE] NUS client disconnected, reason=0x"));
+    BLINKY_SERIAL.println(reason, HEX);
 }
 
 void BleNus::onRxData(uint16_t conn_hdl) {

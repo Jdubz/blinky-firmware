@@ -37,6 +37,7 @@
 #ifdef ARDUINO_ARCH_NRF52
 
 #include <Arduino.h>
+#include "../inputs/SerialOut.h"  // BLINKY_SERIAL (#23)
 
 extern "C" {
   #include <nrf_sdm.h>
@@ -248,9 +249,10 @@ namespace SafeBootWatchdog {
             NRF_POWER->GPREGRET = 0;
             __DSB();
             __ISB();
-            Serial.print(F("[BOOT] Cleared BL boot-attempt counter (was 0x"));
-            Serial.print(cur, HEX);
-            Serial.println(F(")"));
+            // At 60 s, from the loop: through SerialOut, like the stream (#23).
+            BLINKY_SERIAL.print(F("[BOOT] Cleared BL boot-attempt counter (was 0x"));
+            BLINKY_SERIAL.print(cur, HEX);
+            BLINKY_SERIAL.println(F(")"));
         }
     }
 
