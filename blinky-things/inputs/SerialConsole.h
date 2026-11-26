@@ -8,6 +8,8 @@
 #include "../generators/PlasmaGlobe.h"
 #include "../generators/Audio.h"
 #include "../config/SettingsRegistry.h"
+#include "FixedFloat.h"
+#include "SerialOut.h"
 
 // Forward declarations
 class ConfigStorage;
@@ -178,6 +180,16 @@ public:
         for (size_t i = 0; i < size; i++) write(data[i]);
         return size;
     }
+    // print(x, digits) without printf for a float (FixedFloat: the same
+    // bytes, #23); a double keeps Print's path.
+    void printFloat(float x, uint8_t digits) {
+        char b[FixedFloat::BUF_SIZE];
+        const size_t n = FixedFloat::format(b, x, digits);
+        if (n) write(reinterpret_cast<const uint8_t*>(b), n);
+        else print(x, digits);
+    }
+    void printFloat(double x, uint8_t digits) { print(x, digits); }
+    static const size_t CAPACITY = 768;
     void commit() {
         if (len_) {
             sink_.write(buf_, len_);
@@ -190,7 +202,7 @@ private:
     // A 50-band NN line is ~530 B and grows a little as ts/fc gain digits;
     // 768 B keeps it to one write. Lives on the loop task's stack (4 KB):
     // check json info loopStackFree on the bench.
-    uint8_t buf_[768];
+    uint8_t buf_[CAPACITY];
     size_t len_ = 0;
 };
 
@@ -340,6 +352,20 @@ private:
     bool streamNN_ = false;        // NN diagnostic: stream mel bands + NN output at full frame rate
     uint32_t lastNNFrameCount_ = 0; // Track last emitted frame for NN stream
     bool nnStreamFirst_ = true;     // next NN line is the first since `stream nn` (skip = 0)
+    uint32_t nnDroppedFc_ = 0;      // last NN frame counted as dropped (count once, #23)
+    // Room in the USB output ring for one more stream line (#23).
+    static bool streamRoom() {
+#if BLINKY_SERIAL_OUT
+        return SerialOut::instance().roomForLine(LineBuffer::CAPACITY);
+#else
+        return true;
+#endif
+    }
+    static void streamLineDropped() {
+#if BLINKY_SERIAL_OUT
+        SerialOut::instance().lineDropped();
+#endif
+    }
     uint32_t streamLastMs_ = 0;
     uint32_t batteryLastMs_ = 0;
     static const uint16_t STREAM_PERIOD_MS = 50;        // Normal: ~20Hz for audio

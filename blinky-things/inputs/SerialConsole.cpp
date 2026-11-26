@@ -1,4 +1,5 @@
 #include "SerialConsole.h"
+#include "FixedFloat.h"
 #include "../hal/PlatformDetect.h"
 #include "../types/BlinkyAssert.h"
 #include "../config/TotemDefaults.h"
@@ -110,6 +111,11 @@ void SerialConsole::setEsp32BleNus(Esp32BleNus* nus) {
 
 void SerialConsole::begin() {
     // Note: Serial.begin() should be called by main setup() before this
+#if BLINKY_SERIAL_OUT
+    // USB output goes through SerialOut's ring (#23): the loop never waits
+    // on the host. It passes straight through until setup() starts it.
+    out_.setPrimary(&SerialOut::instance());
+#endif
     settings_.setOutput(&out_);  // Route settings output through our tee
     settings_.begin();
     registerSettings();
@@ -691,6 +697,12 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             out_.print(F(",\"mallocIsr\":"));
             out_.print(MallocLock_isrAllocCount);
         }
+#if BLINKY_SERIAL_OUT
+        // Stream lines skipped since boot because the USB host wasn't
+        // draining the output ring (#23); must stay 0 with a reading host.
+        out_.print(F(",\"streamDropped\":"));
+        out_.print(SerialOut::instance().streamLinesDropped());
+#endif
         // Hardware reset reason of this boot (nRF52 RESETREAS bits: 0x1 pin,
         // 0x2 watchdog, 0x4 soft reset, 0x8 CPU lockup; 0 = power-on).
         out_.print(F(",\"resetReason\":"));
@@ -1210,7 +1222,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         // A queued settings write must reach flash first (#191).
         if (configStorage_) configStorage_->flushPendingSave();
         out_.println(F("Rebooting..."));
-        Serial.flush();  // Ensure message is sent before reset
+        BLINKY_SERIAL.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
 #ifdef BLINKY_PLATFORM_NRF52840
         NVIC_SystemReset();
@@ -1230,7 +1242,9 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         out_.print(F("Entering "));
         out_.print(bleMode ? F("BLE DFU") : F("UF2"));
         out_.println(F(" bootloader..."));
-        // No Serial.flush() — reset immediately. Diagnostic output is best-effort.
+        // Into the USB FIFO (bounded, #23), as before the output ring;
+        // reaching the host stays best-effort.
+        BLINKY_SERIAL.flush();
         {
             // Dual-path bootloader entry for maximum reliability:
             // RAM (0x20007F7C): survives system reset but may be cleared by USB hub
@@ -1950,6 +1964,22 @@ void SerialConsole::streamTick() {
     // field (#171). LineBuffer commits at every newline.
     LineBuffer line(out_);
 
+#if BLINKY_SERIAL_OUT
+    // Say so once the ring has room again: stream lines were skipped because
+    // the USB host stopped reading (#23). Never silent: json info has the
+    // running count (streamDropped) too.
+    {
+        static uint32_t reported = 0;
+        const uint32_t dropped = SerialOut::instance().streamLinesDropped();
+        if (dropped != reported && streamRoom()) {
+            line.print(F("[FALLBACK] stream: "));
+            line.print(dropped - reported);
+            line.println(F(" line(s) skipped, the USB host was not reading (json info streamDropped)"));
+            reported = dropped;
+        }
+    }
+#endif
+
     uint32_t now = millis();
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
@@ -1967,7 +1997,15 @@ void SerialConsole::streamTick() {
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
         uint32_t fc = spectral.getFrameCount();
-        if (nnStreamFirst_ || fc != lastNNFrameCount_) {
+        // cppcheck-suppress knownConditionTrueFalse  // always room off the nRF52840 (no SerialOut)
+        if ((nnStreamFirst_ || fc != lastNNFrameCount_) && !streamRoom()) {
+            // The host isn't draining: skip this frame's line, counted once.
+            // lastNNFrameCount_ stays, so the next line's "skip" covers it.
+            if (fc != nnDroppedFc_) {
+                nnDroppedFc_ = fc;
+                streamLineDropped();
+            }
+        } else if (nnStreamFirst_ || fc != lastNNFrameCount_) {
             uint32_t skip = nnStreamFirst_ ? 0 : fc - lastNNFrameCount_ - 1;
             nnStreamFirst_ = false;
             lastNNFrameCount_ = fc;
@@ -1987,24 +2025,24 @@ void SerialConsole::streamTick() {
             line.print(F(",\"mel\":["));
             for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
                 if (i > 0) line.print(',');
-                line.print(mel[i], 4);
+                line.printFloat(mel[i], 4);
             }
             // onset = last pulse strength (gated — only nonzero on rising-edge pulse events)
             line.print(F("],\"onset\":"));
-            line.print(audioCtrl_->getLastOnsetStrength(), 4);
+            line.printFloat(audioCtrl_->getLastOnsetStrength(), 4);
             // nna = raw NN activation (pre-gating, continuous 0-1)
             line.print(F(",\"nna\":"));
-            line.print(audioCtrl_->getFrameOnsetNN().getLastOnset(), 4);
+            line.printFloat(audioCtrl_->getFrameOnsetNN().getLastOnset(), 4);
             line.print(F(",\"nn\":"));
             line.print(audioCtrl_->getFrameOnsetNN().isReady() ? 1 : 0);
             line.print(F(",\"bpm\":"));
-            line.print(audioCtrl_->getCurrentBpm(), 1);
+            line.printFloat(audioCtrl_->getCurrentBpm(), 1);
             line.print(F(",\"phase\":"));
-            line.print(audioCtrl_->getControl().phase, 4);
+            line.printFloat(audioCtrl_->getControl().phase, 4);
             line.print(F(",\"rstr\":"));
-            line.print(audioCtrl_->getControl().rhythmStrength, 3);
+            line.printFloat(audioCtrl_->getControl().rhythmStrength, 3);
             line.print(F(",\"lvl\":"));
-            line.print(mic_->getLevel(), 3);
+            line.printFloat(mic_->getLevel(), 3);
             line.print(F(",\"gain\":"));
             line.print(mic_->getHwGain());
             // Hybrid features — the exact values fed into the NN this frame.
@@ -2015,16 +2053,20 @@ void SerialConsole::streamTick() {
             // Offline replay of old captures via replay_device_capture.py
             // must read the firmware build stamp before trusting these values.
             line.print(F(",\"flat\":"));
-            line.print(spectral.getRawFlatness(), 4);
+            line.printFloat(spectral.getRawFlatness(), 4);
             line.print(F(",\"rflux\":"));
-            line.print(spectral.getRawSpectralFlux(), 4);
+            line.printFloat(spectral.getRawSpectralFlux(), 4);
             line.println(F("}"));
         }
     }
 
     // STATUS update at ~1Hz
     static uint32_t lastStatusMs = 0;
-    if (mic_ && (now - lastStatusMs >= 1000)) {
+    // cppcheck-suppress knownConditionTrueFalse  // always room off the nRF52840 (no SerialOut)
+    if (mic_ && (now - lastStatusMs >= 1000) && !streamRoom()) {
+        lastStatusMs = now;  // this second's STATUS line is skipped, counted
+        streamLineDropped();
+    } else if (mic_ && (now - lastStatusMs >= 1000)) {
         lastStatusMs = now;
         line.print(F("{\"type\":\"STATUS\",\"ts\":"));
         line.print(now);
@@ -2032,16 +2074,20 @@ void SerialConsole::streamTick() {
         line.print(F(",\"hwGain\":"));
         line.print(mic_->getHwGain());
         line.print(F(",\"level\":"));
-        line.print(mic_->getLevel(), 2);
+        line.printFloat(mic_->getLevel(), 2);
         line.print(F(",\"peakLevel\":"));
-        line.print(mic_->getPeakLevel(), MIC_RAW_DECIMALS);
+        line.printFloat(mic_->getPeakLevel(), MIC_RAW_DECIMALS);
         line.println(F("}"));
     }
 
     // Audio streaming at ~20Hz (normal) or ~100Hz (fast mode for testing)
     // Skip when NN-only stream is active (saves serial bandwidth for mel bands)
     uint16_t period = streamFast_ ? STREAM_FAST_PERIOD_MS : STREAM_PERIOD_MS;
-    if (streamEnabled_ && mic_ && (now - streamLastMs_ >= period)) {
+    // cppcheck-suppress knownConditionTrueFalse  // always room off the nRF52840 (no SerialOut)
+    if (streamEnabled_ && mic_ && (now - streamLastMs_ >= period) && !streamRoom()) {
+        streamLastMs_ = now;  // this period's line is skipped, counted
+        streamLineDropped();
+    } else if (streamEnabled_ && mic_ && (now - streamLastMs_ >= period)) {
         streamLastMs_ = now;
 
         // Output compact JSON for web app (abbreviated field names for serial bandwidth)
@@ -2063,20 +2109,20 @@ void SerialConsole::streamTick() {
         // agree → detector agreement : 0-7 (how many detectors fired)
         // conf  → ensemble confidence: 0-1 (combined confidence score)
         line.print(F("{\"a\":{\"l\":"));
-        line.print(mic_->getLevel(), 2);
+        line.printFloat(mic_->getLevel(), 2);
         line.print(F(",\"t\":"));
         // Pulse strength from ODF-derived pulse detection (v67)
         float transient = 0.0f;
         if (audioCtrl_) {
             transient = audioCtrl_->getLastPulseStrength();
         }
-        line.print(transient, 2);
+        line.printFloat(transient, 2);
         line.print(F(",\"pk\":"));
-        line.print(mic_->getPeakLevel(), MIC_RAW_DECIMALS);
+        line.printFloat(mic_->getPeakLevel(), MIC_RAW_DECIMALS);
         line.print(F(",\"vl\":"));
-        line.print(mic_->getValleyLevel(), MIC_RAW_DECIMALS);
+        line.printFloat(mic_->getValleyLevel(), MIC_RAW_DECIMALS);
         line.print(F(",\"raw\":"));
-        line.print(mic_->getRawLevel(), MIC_RAW_DECIMALS);
+        line.printFloat(mic_->getRawLevel(), MIC_RAW_DECIMALS);
         line.print(F(",\"h\":"));
         line.print(mic_->getHwGain());
         line.print(F(",\"alive\":"));
@@ -2086,14 +2132,14 @@ void SerialConsole::streamTick() {
         // (BandFlux per-band flux fields removed v67 — BandFlux pipeline removed)
         if (streamDebug_ && audioCtrl_) {
             line.print(F(",\"pulse\":"));
-            line.print(audioCtrl_->getLastPulseStrength(), 3);
+            line.printFloat(audioCtrl_->getLastPulseStrength(), 3);
 
             // Spectral processing state (compressor + whitening)
             const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
             line.print(F(",\"rms\":"));
-            line.print(spectral.getFrameRmsDb(), 1);
+            line.printFloat(spectral.getFrameRmsDb(), 1);
             line.print(F(",\"cg\":"));
-            line.print(spectral.getSmoothedGainDb(), 2);
+            line.printFloat(spectral.getSmoothedGainDb(), 2);
         }
 
         line.print(F("}"));
@@ -2119,25 +2165,25 @@ void SerialConsole::streamTick() {
             line.print(F(",\"a\":"));
             line.print(audio.rhythmStrength > audioCtrl_->activationThreshold ? 1 : 0);
             line.print(F(",\"bpm\":"));
-            line.print(audioCtrl_->getCurrentBpm(), 1);
+            line.printFloat(audioCtrl_->getCurrentBpm(), 1);
             line.print(F(",\"ph\":"));
-            line.print(currentPhase, 2);
+            line.printFloat(currentPhase, 2);
             line.print(F(",\"pp\":"));
-            line.print(audio.plpPulse, 3);
+            line.printFloat(audio.plpPulse, 3);
             line.print(F(",\"str\":"));
-            line.print(audio.rhythmStrength, 2);
+            line.printFloat(audio.rhythmStrength, 2);
             line.print(F(",\"q\":"));
             line.print(beatEvent);
             line.print(F(",\"e\":"));
-            line.print(audio.energy, 2);
+            line.printFloat(audio.energy, 2);
             line.print(F(",\"p\":"));
-            line.print(audio.pulse, 2);
+            line.printFloat(audio.pulse, 2);
             line.print(F(",\"od\":"));
-            line.print(audioCtrl_->getOnsetDensity(), 1);
+            line.printFloat(audioCtrl_->getOnsetDensity(), 1);
             // "nn" (name kept for the server's signal capture): the onset
             // activation of whichever detector runs (OnsetDetector.h).
             line.print(F(",\"nn\":"));
-            line.print(audioCtrl_->getOnsetActivation(), 3);
+            line.printFloat(audioCtrl_->getOnsetActivation(), 3);
             line.print(F(",\"per\":"));  // ACF period in ~66Hz analysis frames
             line.print(audioCtrl_->getPlpPeriod());
 
@@ -2150,34 +2196,34 @@ void SerialConsole::streamTick() {
                 // produces. Gap 4 fix in b136. Keep `flat` around so older
                 // Phase 1-3 analysis captures can still be re-read.
                 line.print(F(",\"flat\":"));
-                line.print(spectral.getSpectralFlatness(), 4);
+                line.printFloat(spectral.getSpectralFlatness(), 4);
                 line.print(F(",\"rflat\":"));
-                line.print(spectral.getRawFlatness(), 4);
+                line.printFloat(spectral.getRawFlatness(), 4);
                 line.print(F(",\"rflux\":"));
-                line.print(spectral.getRawSpectralFlux(), 4);
+                line.printFloat(spectral.getRawSpectralFlux(), 4);
                 // Phase 2a shape features (pre-compressor mags, match Python ref).
                 line.print(F(",\"cent\":"));
-                line.print(spectral.getRawCentroid(), 2);
+                line.printFloat(spectral.getRawCentroid(), 2);
                 line.print(F(",\"crest\":"));
-                line.print(spectral.getRawCrest(), 3);
+                line.printFloat(spectral.getRawCrest(), 3);
                 line.print(F(",\"roll\":"));
-                line.print(spectral.getRawRolloff(), 1);
+                line.printFloat(spectral.getRawRolloff(), 1);
                 line.print(F(",\"hfc\":"));
-                line.print(spectral.getRawHFC(), 4);
+                line.printFloat(spectral.getRawHFC(), 4);
                 line.print(F(",\"conf\":"));
-                line.print(audioCtrl_->getPeriodicityStrength(), 3);
+                line.printFloat(audioCtrl_->getPeriodicityStrength(), 3);
                 line.print(F(",\"plpc\":"));
-                line.print(audioCtrl_->getPlpConfidence(), 3);
+                line.printFloat(audioCtrl_->getPlpConfidence(), 3);
                 line.print(F(",\"aph\":"));
-                line.print(audioCtrl_->getPlpAccentPhase(), 3);
+                line.printFloat(audioCtrl_->getPlpAccentPhase(), 3);
                 line.print(F(",\"src\":"));
                 line.print(audioCtrl_->getPlpBestSource());
                 // "nna": flux-fold vs source-2 fold agreement. Source 2 is mic
                 // level since #155, so this is NOT an NN signal.
                 line.print(F(",\"nna\":"));
-                line.print(audioCtrl_->getPlpNNAgreement(), 3);
+                line.printFloat(audioCtrl_->getPlpNNAgreement(), 3);
                 line.print(F(",\"rel\":"));
-                line.print(audioCtrl_->getPlpReliability(), 3);
+                line.printFloat(audioCtrl_->getPlpReliability(), 3);
                 // beatStability: rolling stability of inter-beat intervals.
                 // Audit D10 (T1.4-rollup completion 2026-04-25) — already
                 // computed by AudioTracker, was previously only visible via
@@ -2186,14 +2232,14 @@ void SerialConsole::streamTick() {
                 // offline analysis (e.g. correlate per-beat confidence
                 // against beatStability).
                 line.print(F(",\"bs\":"));
-                line.print(audioCtrl_->getBeatStability(), 3);
+                line.printFloat(audioCtrl_->getBeatStability(), 3);
                 line.print(F(",\"sl\":{\"id\":"));
                 line.print(audioCtrl_->getActiveSlotId());
                 line.print(F(",\"conf\":["));
                 for (int si = 0; si < audioCtrl_->getSlotCount(); si++) {
                     if (si > 0) line.print(F(","));
                     const PatternSlot& slot = audioCtrl_->getSlot(si);
-                    line.print(slot.valid ? slot.confidence : 0.0f, 2);
+                    line.printFloat(slot.valid ? slot.confidence : 0.0f, 2);
                 }
                 line.print(F("]}"));
             }
@@ -2216,19 +2262,19 @@ void SerialConsole::streamTick() {
         if (pipeline_ && pipeline_->isValid()) {
             const FrameMetrics& fm = pipeline_->getFrameMetrics();
             line.print(F(",\"v\":{\"l\":"));
-            line.print(fm.getAvgL(), 1);
+            line.printFloat(fm.getAvgL(), 1);
             line.print(F(",\"mx\":"));
-            line.print(fm.getMaxL(), 0);
+            line.printFloat(fm.getMaxL(), 0);
             line.print(F(",\"ct\":"));
-            line.print(fm.getRmsContrast(), 1);
+            line.printFloat(fm.getRmsContrast(), 1);
             line.print(F(",\"act\":"));
-            line.print(fm.getActivity(), 3);
+            line.printFloat(fm.getActivity(), 3);
             line.print(F(",\"cx\":"));
-            line.print(fm.getCentroidX(), 2);
+            line.printFloat(fm.getCentroidX(), 2);
             line.print(F(",\"cy\":"));
-            line.print(fm.getCentroidY(), 2);
+            line.printFloat(fm.getCentroidY(), 2);
             line.print(F(",\"sat\":"));
-            line.print(fm.getSatMean(), 2);
+            line.printFloat(fm.getSatMean(), 2);
             line.print(F("}"));
         }
 
@@ -2236,7 +2282,11 @@ void SerialConsole::streamTick() {
     }
 
     // Battery streaming at ~1Hz
-    if (battery_ && (now - batteryLastMs_ >= BATTERY_PERIOD_MS)) {
+    // cppcheck-suppress knownConditionTrueFalse  // always room off the nRF52840 (no SerialOut)
+    if (battery_ && (now - batteryLastMs_ >= BATTERY_PERIOD_MS) && !streamRoom()) {
+        batteryLastMs_ = now;  // skipped, counted (#23)
+        streamLineDropped();
+    } else if (battery_ && (now - batteryLastMs_ >= BATTERY_PERIOD_MS)) {
         batteryLastMs_ = now;
 
         // Output battery status JSON
@@ -2250,7 +2300,7 @@ void SerialConsole::streamTick() {
         line.print(F(",\"c\":"));
         line.print(battery_->isCharging() ? F("true") : F("false"));
         line.print(F(",\"v\":"));
-        line.print(battery_->getVoltage(), 2);
+        line.printFloat(battery_->getVoltage(), 2);
         line.print(F(",\"p\":"));
         line.print(battery_->getPercent());
         line.println(F("}}"));

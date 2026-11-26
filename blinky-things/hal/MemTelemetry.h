@@ -21,6 +21,7 @@
  */
 
 #include "PlatformDetect.h"
+#include "../inputs/SerialOut.h"  // BLINKY_SERIAL: run-time logs (#23)
 
 #ifdef BLINKY_PLATFORM_NRF52840
 
@@ -63,7 +64,7 @@ inline void sampleHeap() {
         static bool logged = false;
         if (!logged) {
             logged = true;
-            Serial.println(F("[ERROR] MemTelemetry::sampleHeap called off the loop task; heap stats not sampled"));
+            BLINKY_SERIAL.println(F("[ERROR] MemTelemetry::sampleHeap called off the loop task; heap stats not sampled"));
         }
         return;
     }

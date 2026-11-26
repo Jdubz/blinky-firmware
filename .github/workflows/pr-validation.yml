@@ -216,6 +216,17 @@ jobs:
           -o build/test_settings_journal
         build/test_settings_journal
 
+    # The stream's float formatting (#23) matches printf("%.*f") byte for byte:
+    # exact ties at every precision, signed zero, millions of random floats.
+    - name: Stream float formatting (UBSan)
+      run: |
+        # -Ofast too: the firmware core builds with it (-ffinite-math-only, -fno-signed-zeros).
+        for opt in -O1 -Ofast; do
+          g++ -std=c++17 -Wall -Wextra -Werror $opt -g -fsanitize=undefined -fno-sanitize-recover=all \
+            -I blinky-things tests/unit/test_fixed_float.cpp -o build/test_fixed_float
+          build/test_fixed_float
+        done
+
   timing:
     # Quoted: unquoted, YAML reads ` #259-#261)` as a comment and the check is named "...phase,".
     name: "Absolute Timing (generators + rhythm phase, #259-#261)"
