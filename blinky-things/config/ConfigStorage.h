@@ -425,9 +425,14 @@ public:
     // Wait (up to timeoutMs) for a queued settings write to reach flash.
     // Call before anything that resets the device, or the write is lost
     // (#191). Returns false, after logging an error, on timeout. Always
-    // true where saves are synchronous.
+    // true where saves are synchronous. On nRF52 it then brings /config.bin
+    // up to the settings journal's state (#49), for a firmware flashed next
+    // that predates the journal.
     bool flushPendingSave(uint32_t timeoutMs = 3000);
     bool isValid() const { return valid_; }
+    // One line: where settings persist and how (journal page, free bytes,
+    // erases, flash operations; or the /config.bin fallback). #49.
+    void printStorageStatus(Print& out) const;
 
     // Device configuration accessors (v28+)
     const StoredDeviceConfig& getDeviceConfig() const { return data_.device; }
@@ -468,9 +473,9 @@ public:
     // Auto-save support
     // Trailing debounce: every change restarts the 5 s quiet window, so a
     // slider drag or a burst of `set` commands produces ONE flash write
-    // after the changes stop. The write itself runs on the writer task
-    // (#191), but a page erase still halts the CPU for up to ~85 ms, so
-    // fewer writes is still better.
+    // after the changes stop. The write runs on the writer task (#191) and
+    // only appends to the settings journal (config/SettingsJournal.h): no
+    // page erase while the loop runs (#49).
     void markDirty() { dirty_ = true; lastDirtyMs_ = millis(); }
     void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& plasmaParams,
                      const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
@@ -492,7 +497,9 @@ private:
     // and verify the write: quarantine, factory reset).
     void saveToFlashSync();
 #if BLINKY_CONFIG_ASYNC_SAVE
-    bool writeNow(const ConfigData& d);   // the LittleFS write itself; logs on failure
+    bool writeNow(const ConfigData& d);   // the journal append (or /config.bin fallback); logs on failure
+    void prepareJournal();                // boot: journal erases + /config.bin copy (#49)
+    void refreshFileCopy();               // before a reset: /config.bin = the journal's state
     void startWriter();
     static void writerMain(void* self);
     ConfigData pending_;                  // newest snapshot waiting for the writer

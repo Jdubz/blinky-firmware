@@ -19,7 +19,8 @@ bash "$BLINKY_ROOT/scripts/apply_core_patches.sh" --check >/dev/null
 
 LOG_DIR="$(mktemp -d)"
 LOG="$LOG_DIR/compile.log"
-if ! "$CLI" "$@" --verbose > "$LOG" 2>&1; then
+# The settings journal's link flag (arduino_env.sh, #49), as build.sh passes it.
+if ! "$CLI" "$@" --build-property "$BLINKY_ELF_FLAGS_PROPERTY" --verbose > "$LOG" 2>&1; then
     grep -E "error|Error" "$LOG" | head -40 >&2
     echo "Compilation failed (full log: $LOG)" >&2
     exit 1

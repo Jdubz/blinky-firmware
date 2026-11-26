@@ -30,6 +30,21 @@ static const char* CONFIG_FILENAME = "/config.bin";
 // presence of the file is the marker, and a corrupted/short read falls
 // through to "missing" → triggers the same reformat path.
 static const char* FW_BUILD_MARKER_FILE = "/.fw_build";
+// Settings journal (#49): run-time saves only write flash; erases happen at
+// boot. /config.bin stays as a copy, refreshed at boot, for older firmware
+// and as the fallback. Pointers, created in begin() (SIOF, as configFile).
+#include "NrfJournalFlash.h"
+static NrfJournalFlash* journalFlash = nullptr;
+static_assert(sizeof(ConfigStorage::ConfigData) <= SettingsJournal::MAX_STATE,
+              "ConfigData must fit the settings journal's state buffer");
+static SettingsJournal* journal = nullptr;
+// /config.bin as read at boot: bytes and CRC (0 bytes: missing/unreadable).
+static uint32_t bootFileLen = 0;
+static uint32_t bootFileCrc = 0;
+// Where this boot's settings came from, and the journal's erases at boot.
+static const char* bootSource = "defaults";
+static uint32_t bootErases = 0;
+static bool bootFileRewritten = false;  // /config.bin was behind the journal at boot
 // Flash storage for ESP32-S3 via NVS (Non-Volatile Storage) Preferences API
 #elif defined(ESP32)
 #include <Preferences.h>
@@ -187,6 +202,7 @@ void ConfigStorage::begin() {
             ConfigData snapshot;
             memset(&snapshot, 0, sizeof(snapshot));
             bool haveSnapshot = false;
+            size_t snapshotBytes = 0;
             if (InternalFS.exists(CONFIG_FILENAME)) {
                 configFile->open(CONFIG_FILENAME, FILE_O_READ);
                 if (*configFile) {
@@ -195,6 +211,7 @@ void ConfigStorage::begin() {
                     configFile->close();
                     if (bytesRead >= MIN_SNAPSHOT_BYTES && snapshot.magic == MAGIC_NUMBER) {
                         haveSnapshot = true;
+                        snapshotBytes = bytesRead;
                     }
                 }
             }
@@ -230,9 +247,11 @@ void ConfigStorage::begin() {
                 configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
                 if (*configFile) {
                     size_t wrote = configFile->write(
-                        reinterpret_cast<const uint8_t*>(&snapshot), sizeof(snapshot));
+                        reinterpret_cast<const uint8_t*>(&snapshot), snapshotBytes);
                     configFile->close();
-                    if (wrote == sizeof(snapshot)) {
+                    // The exact bytes read: the same file (its CRC is how the
+                    // settings journal knows /config.bin is still its copy).
+                    if (wrote == snapshotBytes) {
                         Serial.println(F("[FRESH-BUILD] /config.bin restored from snapshot"));
                     } else {
                         Serial.println(F("[FRESH-BUILD] /config.bin restore short-write; device will boot to safe mode"));
@@ -255,9 +274,18 @@ void ConfigStorage::begin() {
         }
     }
 
+    // Settings journal (#49). Mounted before loadFromFlash(), which picks
+    // the journal or /config.bin; prepared after, while nothing renders yet.
+    if (NrfJournalFlash::usable()) {
+        journalFlash = new NrfJournalFlash();
+        journal = new SettingsJournal(*journalFlash);
+        journal->mount();
+    }
+
     if (loadFromFlash()) {
         SerialConsole::logDebug(F("Config loaded from flash"));
         valid_ = true;
+        prepareJournal();
         return;
     }
 #elif defined(ESP32)
@@ -286,6 +314,10 @@ void ConfigStorage::begin() {
     SerialConsole::logDebug(F("Using default config"));
     loadDefaults();
     valid_ = true;
+#if BLINKY_CONFIG_ASYNC_SAVE
+    bootSource = "defaults";
+    prepareJournal();  // the journal starts from the defaults (#49)
+#endif
 }
 
 void ConfigStorage::loadDeviceDefaults() {
@@ -430,14 +462,38 @@ bool ConfigStorage::loadFromFlash() {
 #elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
     if (!flashOk || configFile == nullptr) return false;
 
-    // Open config file for reading
+    // /config.bin: read however many bytes are stored (may be less than
+    // sizeof(ConfigData) when the struct grew due to a settings version bump).
+    bootFileLen = 0;
+    bootFileCrc = 0;
     configFile->open(CONFIG_FILENAME, FILE_O_READ);
-    if (!(*configFile)) return false;
+    if (*configFile) {
+        bytesRead = configFile->read((uint8_t*)&temp, sizeof(ConfigData));
+        configFile->close();
+        bootFileLen = bytesRead;
+        bootFileCrc = SettingsJournal::crc32(0, reinterpret_cast<const uint8_t*>(&temp), bytesRead);
+        bootSource = "config.bin";
+    }
 
-    // Read however many bytes are stored (may be less than sizeof(ConfigData)
-    // when the struct grew due to a settings version bump).
-    bytesRead = configFile->read((uint8_t*)&temp, sizeof(ConfigData));
-    configFile->close();
+    // The journal (#49) holds every save since the last boot; /config.bin
+    // was refreshed from it at that boot, and the journal recorded that
+    // copy's CRC (SYNC). A /config.bin that no longer has that CRC was
+    // written by something else since (an older firmware, after a
+    // downgrade), so it is newer than the journal and wins.
+    if (journal != nullptr && journal->hasState()) {
+        const bool fileChanged = bootFileLen > 0 && journal->hasSync() && journal->syncValue() != bootFileCrc;
+        if (fileChanged) {
+            SerialConsole::logWarn(F("/config.bin changed outside the settings journal (older firmware ran?): loading it"));
+        } else {
+            memset(&temp, 0, sizeof(temp));
+            const uint16_t n = journal->stateLen() < sizeof(ConfigData) ? journal->stateLen()
+                                                                       : static_cast<uint16_t>(sizeof(ConfigData));
+            memcpy(&temp, journal->state(), n);
+            bytesRead = n;
+            SerialConsole::logDebug(F("Config loaded from the settings journal"));
+            bootSource = "journal";
+        }
+    }
 
     // Nothing useful was read
     if (bytesRead < MIN_DEVICE_BYTES) return false;
@@ -608,6 +664,10 @@ void ConfigStorage::saveToFlashSync() {
     lastWrittenValid_ = false;  // the old copy is removed before the write
     if (mtx) xSemaphoreGive(mtx);
     const bool ok = writeNow(data_);
+    // The callers (quarantine, factory reset) are followed by a reset or a
+    // DFU entry that doesn't flush: bring /config.bin along now (#49), so a
+    // pre-journal firmware flashed next reads this write too.
+    refreshFileCopy();
     if (mtx) xSemaphoreTake(mtx, portMAX_DELAY);
     lastWrittenCrc_ = crc;
     lastWrittenValid_ = ok;
@@ -620,13 +680,19 @@ void ConfigStorage::saveToFlashSync() {
 bool ConfigStorage::flushPendingSave(uint32_t timeoutMs) {
 #if BLINKY_CONFIG_ASYNC_SAVE
     auto mtx = static_cast<SemaphoreHandle_t>(stateMutex_);
-    if (mtx == nullptr) return true;  // no writer: saves were synchronous
+    if (mtx == nullptr) {  // no writer: saves were synchronous
+        refreshFileCopy();
+        return true;
+    }
     const uint32_t t0 = millis();
     for (;;) {
         xSemaphoreTake(mtx, portMAX_DELAY);
         const bool idle = !pendingValid_ && !writerBusy_;
         xSemaphoreGive(mtx);
-        if (idle) return true;
+        if (idle) {
+            refreshFileCopy();
+            return true;
+        }
         if (millis() - t0 > timeoutMs) {
             SerialConsole::logError(F("Settings write did not reach flash in time (pending change may be lost)"));
             return false;
@@ -640,32 +706,138 @@ bool ConfigStorage::flushPendingSave(uint32_t timeoutMs) {
 }
 
 #if BLINKY_CONFIG_ASYNC_SAVE
-bool ConfigStorage::writeNow(const ConfigData& d) {
-    // One writer at a time: the writer task and saveToFlashSync() share the
-    // configFile object (a save can also arrive from the BLE task, #173).
-    auto wm = static_cast<SemaphoreHandle_t>(writeMutex_);
-    if (wm) xSemaphoreTake(wm, portMAX_DELAY);
-    bool ok = false;
-    // Delete existing file if present
+// The /config.bin write (LittleFS through the core's page cache: each
+// changed 4 kB page is erased and rewritten, halting the CPU ~85 ms per
+// erase). Callers hold writeMutex_.
+static bool writeConfigFile(const uint8_t* d, size_t n) {
     if (InternalFS.exists(CONFIG_FILENAME) && !InternalFS.remove(CONFIG_FILENAME)) {
         SerialConsole::logError(F("Failed to remove old config file"));
-    } else {
-        configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
-        if (!(*configFile)) {
-            SerialConsole::logError(F("Failed to open config file"));
-        } else {
-            uint32_t bytesWritten = configFile->write(reinterpret_cast<const uint8_t*>(&d), sizeof(ConfigData));
-            configFile->close();
-            if (bytesWritten != sizeof(ConfigData)) {
-                SerialConsole::logError(F("Config write failed"));
-            } else {
-                SerialConsole::logDebug(F("Config saved to flash"));
-                ok = true;
-            }
+        return false;
+    }
+    configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
+    if (!(*configFile)) {
+        SerialConsole::logError(F("Failed to open config file"));
+        return false;
+    }
+    const uint32_t bytesWritten = configFile->write(d, n);
+    configFile->close();
+    if (bytesWritten != n) {
+        SerialConsole::logError(F("Config write failed"));
+        return false;
+    }
+    SerialConsole::logDebug(F("Config saved to /config.bin"));
+    return true;
+}
+
+void ConfigStorage::prepareJournal() {
+    if (journal == nullptr) return;
+    // Boot, before the loop renders: the only time the journal erases.
+    // data_ (loaded from the journal or /config.bin, or defaults) becomes
+    // its state, its current page keeps room and the other pages are
+    // erased, so this session's saves only write.
+    data_.magic = MAGIC_NUMBER;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
+    const uint8_t* d = reinterpret_cast<const uint8_t*>(&data_);
+    auto wm = static_cast<SemaphoreHandle_t>(writeMutex_);
+    if (wm) xSemaphoreTake(wm, portMAX_DELAY);
+    if (!journal->prepare(d, sizeof(ConfigData))) {
+        SerialConsole::logError(F("[FALLBACK] settings journal could not be prepared: saves use /config.bin (stall the loop, #49)"));
+        journal = nullptr;
+        if (wm) xSemaphoreGive(wm);
+        return;
+    }
+    const uint32_t crc = SettingsJournal::crc32(0, d, sizeof(ConfigData));
+    // Keep /config.bin a copy of the journal's state (for older firmware,
+    // and the fallback) and record the copy's CRC in the journal (SYNC),
+    // which is how the next boot tells whether someone else wrote it.
+    bool fileOk = bootFileLen == sizeof(ConfigData) && bootFileCrc == crc;
+    if (!fileOk) fileOk = bootFileRewritten = writeConfigFile(d, sizeof(ConfigData));
+    if (fileOk && journal->appendSync(crc, /*allowErase=*/true) == SettingsJournal::Result::FAILED) {
+        SerialConsole::logError(F("settings journal: SYNC record not written"));
+    }
+    if (wm) xSemaphoreGive(wm);
+    lastWrittenCrc_ = crc;
+    lastWrittenValid_ = true;
+    bootErases = journal->eraseCount();
+    printStorageStatus(Serial);
+}
+
+void ConfigStorage::refreshFileCopy() {
+    // A reset follows (reboot, bootloader, ota commit): bring /config.bin
+    // up to the journal's state, so a firmware that predates the journal,
+    // flashed next, reads this session's saves too. The stall is harmless:
+    // the loop is about to stop.
+    if (journal == nullptr || !journal->hasState()) return;
+    auto wm = static_cast<SemaphoreHandle_t>(writeMutex_);
+    if (wm) xSemaphoreTake(wm, portMAX_DELAY);
+    if (journal != nullptr) {
+        const uint32_t crc = SettingsJournal::crc32(0, journal->state(), journal->stateLen());
+        if (!(journal->hasSync() && journal->syncValue() == crc) &&
+            writeConfigFile(journal->state(), journal->stateLen()) &&
+            journal->appendSync(crc, /*allowErase=*/true) == SettingsJournal::Result::FAILED) {
+            SerialConsole::logError(F("settings journal: SYNC record not written"));
         }
     }
     if (wm) xSemaphoreGive(wm);
+}
+
+bool ConfigStorage::writeNow(const ConfigData& d) {
+    // One writer at a time: the writer task and saveToFlashSync() share the
+    // journal and the configFile object (a save can also arrive from the
+    // BLE task, #173).
+    auto wm = static_cast<SemaphoreHandle_t>(writeMutex_);
+    if (wm) xSemaphoreTake(wm, portMAX_DELAY);
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(&d);
+    bool ok = false;
+    bool done = false;
+    if (journal != nullptr) {
+        // Writes only, in short chunks: no page erase while the loop runs (#49).
+        const SettingsJournal::Result r = journal->append(bytes, sizeof(ConfigData), /*allowErase=*/true);
+        if (r == SettingsJournal::Result::WRITTEN || r == SettingsJournal::Result::UNCHANGED) {
+            SerialConsole::logDebug(F("Config saved to the settings journal"));
+            ok = done = true;
+        } else if (r == SettingsJournal::Result::WRITTEN_AFTER_ERASE) {
+            // Every journal page was used this session (hundreds of saves):
+            // a page had to be erased, halting the CPU up to 85 ms. The next
+            // boot compacts the journal.
+            SerialConsole::logWarn(F("Settings journal full: erased a page (one frame stalled, #49); a reboot compacts it"));
+            ok = done = true;
+        } else {
+            // Off for the rest of the session: /config.bin is now newer than
+            // the journal (the next boot sees its CRC changed and loads it),
+            // and every later save must go there too.
+            SerialConsole::logError(F("[FALLBACK] settings journal write failed: saves use /config.bin until reboot (stall the loop, #49)"));
+            journal = nullptr;
+        }
+    }
+    if (!done) ok = writeConfigFile(bytes, sizeof(ConfigData));
+    if (wm) xSemaphoreGive(wm);
     return ok;
+}
+
+void ConfigStorage::printStorageStatus(Print& out) const {
+    if (journal == nullptr) {
+        out.println(F("storage: /config.bin (settings journal off: saves erase flash and stall the loop, #49)"));
+        return;
+    }
+    out.print(F("storage: journal page "));
+    out.print(journal->currentPage());
+    out.print(F(", "));
+    out.print(journal->freeBytes());
+    out.print(F(" B free, erases "));
+    out.print(bootErases);
+    out.print(F(" at boot / "));
+    out.print(journal->eraseCount() - bootErases);
+    out.print(F(" since, flash ops "));
+    out.print(NrfJournalFlash::ops());
+    out.print(F(" (retried "));
+    out.print(NrfJournalFlash::retries());
+    out.print(F("), loaded from "));
+    out.print(bootSource);
+    out.print(F(", config.bin copy "));
+    out.print(journal->hasSync() ? F("synced") : F("not synced"));
+    out.println(bootFileRewritten ? F(" (rewritten at boot)") : F(" (current at boot)"));
 }
 
 void ConfigStorage::writerMain(void* arg) {
@@ -720,6 +892,10 @@ void ConfigStorage::startWriter() {
     }
     writerTask_ = h;
 }
+#else
+void ConfigStorage::printStorageStatus(Print& out) const {
+    out.println(F("storage: this platform's default (no settings journal)"));
+}
 #endif
 
 bool ConfigStorage::quarantineDeviceConfig() {
@@ -764,6 +940,19 @@ bool ConfigStorage::quarantineDeviceConfig() {
     // behaviour: if we can't verify, treat as failure.
     bool persisted_valid = true;
 #if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+    // Both copies must say invalid: the journal (what this firmware loads)
+    // and /config.bin (what a pre-journal recovery firmware loads, #49).
+    bool journalValid = false;
+    if (journal != nullptr) {
+        // Re-scan the journal from flash: what the next boot will load.
+        ConfigData verify = {};
+        journalValid = true;
+        if (journal->mount() && journal->stateLen() >= offsetof(ConfigData, device) + sizeof(StoredDeviceConfig)) {
+            memcpy(&verify, journal->state(),
+                   journal->stateLen() < sizeof(ConfigData) ? journal->stateLen() : sizeof(ConfigData));
+            journalValid = verify.device.isValid;
+        }
+    }
     if (flashOk && configFile != nullptr) {
         using namespace Adafruit_LittleFS_Namespace;
         ConfigData verify = {};
@@ -776,6 +965,7 @@ bool ConfigStorage::quarantineDeviceConfig() {
             }
         }
     }
+    persisted_valid = persisted_valid || journalValid;
 #elif defined(ESP32)
     // ESP32 path: read back via NVS to verify. Best-effort.
     ConfigData verify = {};

@@ -207,6 +207,15 @@ jobs:
           tests/unit/test_led_brightness.cpp -o build/test_led_brightness
         build/test_led_brightness
 
+    # The settings journal (#49) on a simulated NOR flash: no erase at run time after
+    # boot, every save read back, a power cut after any word keeps the old or new state.
+    - name: Settings journal (UBSan + ASan)
+      run: |
+        g++ -std=c++17 -Wall -Wextra -Werror -O1 -g -fsanitize=undefined,address -fno-sanitize-recover=all \
+          -I blinky-things tests/unit/test_settings_journal.cpp blinky-things/config/SettingsJournal.cpp \
+          -o build/test_settings_journal
+        build/test_settings_journal
+
   timing:
     # Quoted: unquoted, YAML reads ` #259-#261)` as a comment and the check is named "...phase,".
     name: "Absolute Timing (generators + rhythm phase, #259-#261)"

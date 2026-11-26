@@ -146,6 +146,10 @@ COMPILE_ARGS=(
 if $OTA_BENCH_KEY; then
     COMPILE_ARGS+=(--build-property "compiler.cpp.extra_flags=-DBLINKY_OTA_BENCH_KEY")
 fi
+if ! $ESP32; then
+    # The settings journal's link flag (scripts/arduino_env.sh, #49).
+    COMPILE_ARGS+=(--build-property "$BLINKY_ELF_FLAGS_PROPERTY")
+fi
 if $FINGERPRINT; then
     COMPILE_ARGS+=(--build-path "$FP_DIR/build" --build-cache-path "$FP_DIR/cache")
 fi
