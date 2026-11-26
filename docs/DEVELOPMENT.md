@@ -205,7 +205,13 @@ save                # Persist to flash
 
 `save` (and the auto-save 5 s after the last `set`) returns at once. A writer task does the flash write in the background (blinky_time#191). `reboot`, `bootloader` and `ota commit` wait for a pending write before resetting, so nothing saved is lost.
 
-**Known defect:** a settings page erase can still pause a frame for up to ~90 ms. That breaks the rule that LEDs never drop frames, and it is to be fixed, not accepted.
+**Saves never erase flash while the loop runs (#49).** A page erase halts the nRF52840's CPU for up to 85 ms (product spec, NVMC `tERASEPAGE`), and with the SoftDevice enabled it can't be split: NVMC is a restricted peripheral, so partial erase (`ERASEPAGEPARTIAL`) is out, and `sd_flash_page_erase()` runs the whole erase as one ~90 ms timing event (S140 SDS, "Flash memory API"). Code running from RAM doesn't help either: the SoftDevice's handler and every ISR run from flash. So settings go to a journal (`config/SettingsJournal.h`) in three pages the bootloader reserves for app data and nothing else uses (0xEA000–0xECFFF, below LittleFS; `config/NrfJournalFlash.h`):
+- a save appends a delta record (the changed bytes) in chunks of 8 words, each halting the CPU at most 8 × 41 µs (`tWRITE`);
+- erases happen at boot, before the first frame: the journal keeps its current page and erases the others, leaving room for hundreds of saves per session (683 single-setting saves in the unit test). Only past that does a save erase a page, logged as a warning;
+- `/config.bin` (LittleFS) stays as a copy, refreshed at boot when it differs, for older firmware after a downgrade and as the fallback. A `/config.bin` changed since (an older firmware wrote it) wins over the journal;
+- the journal takes its own flash completion events from Bluefruit's SoC task (`build.sh` links with `-Wl,--wrap=flash_nrf5x_event_cb`), so the core's InternalFS semaphore counts only its own operations.
+
+`tests/unit/test_settings_journal.cpp` runs it on a simulated NOR flash (bits only clear, at most two writes per word, power cut after any word).
 
 ---
 

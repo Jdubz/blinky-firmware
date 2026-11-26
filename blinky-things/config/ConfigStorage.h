@@ -468,9 +468,9 @@ public:
     // Auto-save support
     // Trailing debounce: every change restarts the 5 s quiet window, so a
     // slider drag or a burst of `set` commands produces ONE flash write
-    // after the changes stop. The write itself runs on the writer task
-    // (#191), but a page erase still halts the CPU for up to ~85 ms, so
-    // fewer writes is still better.
+    // after the changes stop. The write runs on the writer task (#191) and
+    // only appends to the settings journal (config/SettingsJournal.h): no
+    // page erase while the loop runs (#49).
     void markDirty() { dirty_ = true; lastDirtyMs_ = millis(); }
     void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const PlasmaGlobeParams& plasmaParams,
                      const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
@@ -492,7 +492,8 @@ private:
     // and verify the write: quarantine, factory reset).
     void saveToFlashSync();
 #if BLINKY_CONFIG_ASYNC_SAVE
-    bool writeNow(const ConfigData& d);   // the LittleFS write itself; logs on failure
+    bool writeNow(const ConfigData& d);   // the journal append (or /config.bin fallback); logs on failure
+    void prepareJournal();                // boot: journal erases + /config.bin copy (#49)
     void startWriter();
     static void writerMain(void* self);
     ConfigData pending_;                  // newest snapshot waiting for the writer
