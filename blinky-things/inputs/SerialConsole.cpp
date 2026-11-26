@@ -1964,6 +1964,22 @@ void SerialConsole::streamTick() {
     // field (#171). LineBuffer commits at every newline.
     LineBuffer line(out_);
 
+#if BLINKY_SERIAL_OUT
+    // Say so once the ring has room again: stream lines were skipped because
+    // the USB host stopped reading (#23). Never silent: json info has the
+    // running count (streamDropped) too.
+    {
+        static uint32_t reported = 0;
+        const uint32_t dropped = SerialOut::instance().streamLinesDropped();
+        if (dropped != reported && streamRoom()) {
+            line.print(F("[FALLBACK] stream: "));
+            line.print(dropped - reported);
+            line.println(F(" line(s) skipped, the USB host was not reading (json info streamDropped)"));
+            reported = dropped;
+        }
+    }
+#endif
+
     uint32_t now = millis();
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
