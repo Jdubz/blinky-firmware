@@ -16,6 +16,12 @@
  * what the getters return until the next window closes. The window in
  * progress is invisible to readers — that keeps results stable from one
  * `json info` call to the next regardless of operator timing.
+ *
+ * `json info` also reports when that window closed (frameWindowEndMs, uptime
+ * millis()) and how long it ran (frameWindowMs: at least WINDOW_MS, longer by
+ * any stall in it). With the reply's own `millis` the host places the window
+ * exactly, e.g. to tell whether one of its settings saves (a known flash-erase
+ * stall, #49) fell inside it.
  */
 namespace LoopMetrics {
 
@@ -32,6 +38,7 @@ struct State {
     uint32_t lastMinMs    = 0;
     uint32_t lastMaxMs    = 0;
     uint32_t lastWindowMs = 0;  // monotonic timestamp of the last closed window
+    uint32_t lastWindowLenMs = 0;  // how long the last closed window ran (>= WINDOW_MS)
     uint32_t prevTickMs   = 0;
 };
 
@@ -105,6 +112,7 @@ inline void tick(uint32_t now) {
         s.lastMinMs    = (s.minFrameMs == UINT32_MAX) ? 0 : s.minFrameMs;
         s.lastMaxMs    = s.maxFrameMs;
         s.lastWindowMs = now;
+        s.lastWindowLenMs = elapsed;
         s.windowStart  = now;
         s.frameCount   = 0;
         s.minFrameMs   = UINT32_MAX;
@@ -121,5 +129,7 @@ inline uint32_t getMaxFrameMs()    { return state().lastMaxMs; }
 // initial fire. The 49.7-day wrap-discard branch in tick() does NOT reset
 // this to 0 — only the boot-init path sees 0.
 inline uint32_t getLastWindowMs()  { return state().lastWindowMs; }
+// Length of the last closed window in ms (0 until one has closed).
+inline uint32_t getLastWindowLenMs() { return state().lastWindowLenMs; }
 
 }  // namespace LoopMetrics
