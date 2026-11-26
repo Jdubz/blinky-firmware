@@ -201,6 +201,7 @@ void ConfigStorage::begin() {
             ConfigData snapshot;
             memset(&snapshot, 0, sizeof(snapshot));
             bool haveSnapshot = false;
+            size_t snapshotBytes = 0;
             if (InternalFS.exists(CONFIG_FILENAME)) {
                 configFile->open(CONFIG_FILENAME, FILE_O_READ);
                 if (*configFile) {
@@ -209,6 +210,7 @@ void ConfigStorage::begin() {
                     configFile->close();
                     if (bytesRead >= MIN_SNAPSHOT_BYTES && snapshot.magic == MAGIC_NUMBER) {
                         haveSnapshot = true;
+                        snapshotBytes = bytesRead;
                     }
                 }
             }
@@ -244,9 +246,11 @@ void ConfigStorage::begin() {
                 configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
                 if (*configFile) {
                     size_t wrote = configFile->write(
-                        reinterpret_cast<const uint8_t*>(&snapshot), sizeof(snapshot));
+                        reinterpret_cast<const uint8_t*>(&snapshot), snapshotBytes);
                     configFile->close();
-                    if (wrote == sizeof(snapshot)) {
+                    // The exact bytes read: the same file (its CRC is how the
+                    // settings journal knows /config.bin is still its copy).
+                    if (wrote == snapshotBytes) {
                         Serial.println(F("[FRESH-BUILD] /config.bin restored from snapshot"));
                     } else {
                         Serial.println(F("[FRESH-BUILD] /config.bin restore short-write; device will boot to safe mode"));
@@ -310,6 +314,7 @@ void ConfigStorage::begin() {
     loadDefaults();
     valid_ = true;
 #if BLINKY_CONFIG_ASYNC_SAVE
+    bootSource = "defaults";
     prepareJournal();  // the journal starts from the defaults (#49)
 #endif
 }

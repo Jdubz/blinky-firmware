@@ -211,6 +211,8 @@ save                # Persist to flash
 - `/config.bin` (LittleFS) stays as a copy, refreshed at boot when it differs, for older firmware after a downgrade and as the fallback. A `/config.bin` changed since (an older firmware wrote it) wins over the journal;
 - the journal takes its own flash completion events from Bluefruit's SoC task (`build.sh` links with `-Wl,--wrap=flash_nrf5x_event_cb`), so the core's InternalFS semaphore counts only its own operations.
 
+`storage` prints the journal's state (current page, free bytes, erases at boot and since, flash operations, where this boot's settings came from). On the test box (2026-11-26), windows holding a save measured `maxFrameMs` 15–19 ms, the same as windows without one (before: 115–119 ms), including 260 saves in a row that rotated the journal to its next page without an erase.
+
 `tests/unit/test_settings_journal.cpp` runs it on a simulated NOR flash (bits only clear, at most two writes per word, power cut after any word).
 
 ---
