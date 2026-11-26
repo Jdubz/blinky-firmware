@@ -664,6 +664,10 @@ void ConfigStorage::saveToFlashSync() {
     lastWrittenValid_ = false;  // the old copy is removed before the write
     if (mtx) xSemaphoreGive(mtx);
     const bool ok = writeNow(data_);
+    // The callers (quarantine, factory reset) are followed by a reset or a
+    // DFU entry that doesn't flush: bring /config.bin along now (#49), so a
+    // pre-journal firmware flashed next reads this write too.
+    refreshFileCopy();
     if (mtx) xSemaphoreTake(mtx, portMAX_DELAY);
     lastWrittenCrc_ = crc;
     lastWrittenValid_ = ok;
@@ -936,15 +940,20 @@ bool ConfigStorage::quarantineDeviceConfig() {
     // behaviour: if we can't verify, treat as failure.
     bool persisted_valid = true;
 #if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+    // Both copies must say invalid: the journal (what this firmware loads)
+    // and /config.bin (what a pre-journal recovery firmware loads, #49).
+    bool journalValid = false;
     if (journal != nullptr) {
         // Re-scan the journal from flash: what the next boot will load.
         ConfigData verify = {};
+        journalValid = true;
         if (journal->mount() && journal->stateLen() >= offsetof(ConfigData, device) + sizeof(StoredDeviceConfig)) {
             memcpy(&verify, journal->state(),
                    journal->stateLen() < sizeof(ConfigData) ? journal->stateLen() : sizeof(ConfigData));
-            persisted_valid = verify.device.isValid;
+            journalValid = verify.device.isValid;
         }
-    } else if (flashOk && configFile != nullptr) {
+    }
+    if (flashOk && configFile != nullptr) {
         using namespace Adafruit_LittleFS_Namespace;
         ConfigData verify = {};
         configFile->open(CONFIG_FILENAME, FILE_O_READ);
@@ -956,6 +965,7 @@ bool ConfigStorage::quarantineDeviceConfig() {
             }
         }
     }
+    persisted_valid = persisted_valid || journalValid;
 #elif defined(ESP32)
     // ESP32 path: read back via NVS to verify. Best-effort.
     ConfigData verify = {};
