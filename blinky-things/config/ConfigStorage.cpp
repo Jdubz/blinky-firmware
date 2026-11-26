@@ -44,6 +44,7 @@ static uint32_t bootFileCrc = 0;
 // Where this boot's settings came from, and the journal's erases at boot.
 static const char* bootSource = "defaults";
 static uint32_t bootErases = 0;
+static bool bootFileRewritten = false;  // /config.bin was behind the journal at boot
 // Flash storage for ESP32-S3 via NVS (Non-Volatile Storage) Preferences API
 #elif defined(ESP32)
 #include <Preferences.h>
@@ -675,13 +676,19 @@ void ConfigStorage::saveToFlashSync() {
 bool ConfigStorage::flushPendingSave(uint32_t timeoutMs) {
 #if BLINKY_CONFIG_ASYNC_SAVE
     auto mtx = static_cast<SemaphoreHandle_t>(stateMutex_);
-    if (mtx == nullptr) return true;  // no writer: saves were synchronous
+    if (mtx == nullptr) {  // no writer: saves were synchronous
+        refreshFileCopy();
+        return true;
+    }
     const uint32_t t0 = millis();
     for (;;) {
         xSemaphoreTake(mtx, portMAX_DELAY);
         const bool idle = !pendingValid_ && !writerBusy_;
         xSemaphoreGive(mtx);
-        if (idle) return true;
+        if (idle) {
+            refreshFileCopy();
+            return true;
+        }
         if (millis() - t0 > timeoutMs) {
             SerialConsole::logError(F("Settings write did not reach flash in time (pending change may be lost)"));
             return false;
@@ -741,7 +748,7 @@ void ConfigStorage::prepareJournal() {
     // and the fallback) and record the copy's CRC in the journal (SYNC),
     // which is how the next boot tells whether someone else wrote it.
     bool fileOk = bootFileLen == sizeof(ConfigData) && bootFileCrc == crc;
-    if (!fileOk) fileOk = writeConfigFile(d, sizeof(ConfigData));
+    if (!fileOk) fileOk = bootFileRewritten = writeConfigFile(d, sizeof(ConfigData));
     if (fileOk && journal->appendSync(crc, /*allowErase=*/true) == SettingsJournal::Result::FAILED) {
         SerialConsole::logError(F("settings journal: SYNC record not written"));
     }
@@ -750,6 +757,25 @@ void ConfigStorage::prepareJournal() {
     lastWrittenValid_ = true;
     bootErases = journal->eraseCount();
     printStorageStatus(Serial);
+}
+
+void ConfigStorage::refreshFileCopy() {
+    // A reset follows (reboot, bootloader, ota commit): bring /config.bin
+    // up to the journal's state, so a firmware that predates the journal,
+    // flashed next, reads this session's saves too. The stall is harmless:
+    // the loop is about to stop.
+    if (journal == nullptr || !journal->hasState()) return;
+    auto wm = static_cast<SemaphoreHandle_t>(writeMutex_);
+    if (wm) xSemaphoreTake(wm, portMAX_DELAY);
+    if (journal != nullptr) {
+        const uint32_t crc = SettingsJournal::crc32(0, journal->state(), journal->stateLen());
+        if (!(journal->hasSync() && journal->syncValue() == crc) &&
+            writeConfigFile(journal->state(), journal->stateLen()) &&
+            journal->appendSync(crc, /*allowErase=*/true) == SettingsJournal::Result::FAILED) {
+            SerialConsole::logError(F("settings journal: SYNC record not written"));
+        }
+    }
+    if (wm) xSemaphoreGive(wm);
 }
 
 bool ConfigStorage::writeNow(const ConfigData& d) {
@@ -774,7 +800,11 @@ bool ConfigStorage::writeNow(const ConfigData& d) {
             SerialConsole::logWarn(F("Settings journal full: erased a page (one frame stalled, #49); a reboot compacts it"));
             ok = done = true;
         } else {
-            SerialConsole::logError(F("[FALLBACK] settings journal write failed: writing /config.bin instead (stalls the loop, #49)"));
+            // Off for the rest of the session: /config.bin is now newer than
+            // the journal (the next boot sees its CRC changed and loads it),
+            // and every later save must go there too.
+            SerialConsole::logError(F("[FALLBACK] settings journal write failed: saves use /config.bin until reboot (stall the loop, #49)"));
+            journal = nullptr;
         }
     }
     if (!done) ok = writeConfigFile(bytes, sizeof(ConfigData));
@@ -802,7 +832,8 @@ void ConfigStorage::printStorageStatus(Print& out) const {
     out.print(F("), loaded from "));
     out.print(bootSource);
     out.print(F(", config.bin copy "));
-    out.println(journal->hasSync() ? F("synced") : F("not synced"));
+    out.print(journal->hasSync() ? F("synced") : F("not synced"));
+    out.println(bootFileRewritten ? F(" (rewritten at boot)") : F(" (current at boot)"));
 }
 
 void ConfigStorage::writerMain(void* arg) {

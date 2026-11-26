@@ -425,7 +425,9 @@ public:
     // Wait (up to timeoutMs) for a queued settings write to reach flash.
     // Call before anything that resets the device, or the write is lost
     // (#191). Returns false, after logging an error, on timeout. Always
-    // true where saves are synchronous.
+    // true where saves are synchronous. On nRF52 it then brings /config.bin
+    // up to the settings journal's state (#49), for a firmware flashed next
+    // that predates the journal.
     bool flushPendingSave(uint32_t timeoutMs = 3000);
     bool isValid() const { return valid_; }
     // One line: where settings persist and how (journal page, free bytes,
@@ -497,6 +499,7 @@ private:
 #if BLINKY_CONFIG_ASYNC_SAVE
     bool writeNow(const ConfigData& d);   // the journal append (or /config.bin fallback); logs on failure
     void prepareJournal();                // boot: journal erases + /config.bin copy (#49)
+    void refreshFileCopy();               // before a reset: /config.bin = the journal's state
     void startWriter();
     static void writerMain(void* self);
     ConfigData pending_;                  // newest snapshot waiting for the writer
