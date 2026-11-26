@@ -42,6 +42,11 @@ BLINKY_CORE="$(_blinky_tc core)"            # e.g. Seeeduino:nrf52@1.1.10
 BLINKY_CORE_VERSION="${BLINKY_CORE##*@}"
 BLINKY_CORE_DIR="$BLINKY_ARDUINO_PACKAGES/Seeeduino/hardware/nrf52/$BLINKY_CORE_VERSION"
 BLINKY_ARDUINO_CLI_VERSION="$(_blinky_tc arduino_cli)"
+# Link flag every nRF52840 build needs (build.sh and in_toolchain.sh pass it):
+# the settings journal (blinky-things/config/NrfJournalFlash.h, #49) takes its
+# own flash completion events before the core's InternalFS handler sees them.
+# A build without it fails to link (__real_flash_nrf5x_event_cb undefined).
+BLINKY_ELF_FLAGS_PROPERTY="compiler.c.elf.extra_flags=-Wl,--wrap=flash_nrf5x_event_cb"
 
 # The arduino-cli version is part of the toolchain too (CI's
 # setup-arduino-cli used to install the newest release, even a release

@@ -1127,6 +1127,13 @@ bool SerialConsole::handleModeCommand(const char* cmd) {
 
 // === CONFIGURATION COMMANDS ===
 bool SerialConsole::handleConfigCommand(const char* cmd) {
+    // "storage": where settings persist (the settings journal, #49). Read-only.
+    if (strcmp(cmd, "storage") == 0) {
+        if (configStorage_) configStorage_->printStorageStatus(out_);
+        else out_.println(F("ERROR"));
+        return true;
+    }
+
     if (strcmp(cmd, "save") == 0) {
         if (configStorage_ && fireGenerator_ && waterGenerator_ && plasmaGenerator_ && mic_) {
             configStorage_->saveConfiguration(
