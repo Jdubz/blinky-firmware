@@ -1139,60 +1139,6 @@ bool SerialConsole::handleModeCommand(const char* cmd) {
 
 // === CONFIGURATION COMMANDS ===
 bool SerialConsole::handleConfigCommand(const char* cmd) {
-    // "selftest float": FixedFloat (the stream's float formatting, #23)
-    // against this firmware's own newlib printf, byte for byte, then the
-    // time each takes per value (whole passes timed: micros() here ticks in
-    // ~1 ms steps). About two seconds of loop.
-    if (strcmp(cmd, "selftest float") == 0) {
-        static const uint32_t N = 10000;
-        auto value = [](uint32_t& seed, uint32_t i) -> float {
-            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
-            float x;
-            if (i & 1) {
-                memcpy(&x, &seed, 4);
-            } else {  // the stream's ranges: levels, dB, BPM, tiny raw levels
-                static const float scale[4] = {1.0f, 200.0f, -90.0f, 0.01f};
-                x = (seed & 0xFFFFFF) / 16777216.0f * scale[(seed >> 24) & 3];
-            }
-            return x;
-        };
-        uint32_t fast = 0, bad = 0, seed = 0x2026B23u;
-        char got[FixedFloat::BUF_SIZE];
-        char want[48];
-        for (uint32_t i = 0; i < N; i++) {
-            const float x = value(seed, i);
-            const uint8_t d = static_cast<uint8_t>(i % 7);
-            if (FixedFloat::format(got, x, d) == 0) continue;
-            fast++;
-            snprintf(want, sizeof(want), "%.*f", d, static_cast<double>(x));
-            if (strcmp(got, want) != 0 && bad++ < 3) {
-                out_.print(F("selftest float MISMATCH d=")); out_.print(d);
-                out_.print(F(" got ")); out_.print(got); out_.print(F(" want ")); out_.println(want);
-            }
-            if ((i & 255) == 0) yield();
-        }
-        // Timing: the same N in-range values (levels 0..1, 4 decimals).
-        uint32_t t0 = micros(), sink = 0;
-        seed = 1;
-        for (uint32_t i = 0; i < N; i++) { seed = seed * 1664525u + 1013904223u; sink += FixedFloat::format(got, (seed >> 8) / 16777216.0f, 4); }
-        const uint32_t usFixed = micros() - t0;
-        t0 = micros();
-        seed = 1;
-        for (uint32_t i = 0; i < N; i++) { seed = seed * 1664525u + 1013904223u; sink += snprintf(want, sizeof(want), "%.*f", 4, static_cast<double>((seed >> 8) / 16777216.0f)); }
-        const uint32_t usPrintf = micros() - t0;
-        out_.print(F("selftest float: "));
-        out_.print(fast);
-        out_.print(F(" values, "));
-        out_.print(bad);
-        out_.print(F(" mismatches; per value (0..1, 4 decimals): FixedFloat "));
-        out_.print(static_cast<float>(usFixed) / N, 2);
-        out_.print(F(" us, printf "));
-        out_.print(static_cast<float>(usPrintf) / N, 2);
-        out_.print(F(" us"));
-        out_.println(sink == 0 ? F(" (?)") : F(""));
-        return true;
-    }
-
     // "storage": where settings persist (the settings journal, #49). Read-only.
     if (strcmp(cmd, "storage") == 0) {
         if (configStorage_) configStorage_->printStorageStatus(out_);
