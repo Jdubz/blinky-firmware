@@ -645,6 +645,12 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         out_.print(LoopMetrics::getMinFrameMs());
         out_.print(F(",\"maxFrameMs\":"));
         out_.print(LoopMetrics::getMaxFrameMs());
+        // When that window closed (uptime ms, the same clock as "millis") and how long it
+        // ran, so the host can place it exactly; 0 and 0 until the first window closes.
+        out_.print(F(",\"frameWindowEndMs\":"));
+        out_.print(LoopMetrics::getLastWindowMs());
+        out_.print(F(",\"frameWindowMs\":"));
+        out_.print(LoopMetrics::getLastWindowLenMs());
 
 #ifdef BLINKY_PLATFORM_NRF52840
         // Stack / heap headroom (#186, #187). Stack values are the minimum
