@@ -28,7 +28,7 @@
  * times. The caller's frame loop does:
  *   update(now)  before rendering (advances FLASH),
  *   fill(matrix) instead of the generator when active(),
- *   shown(now)   right after the LED show() (stamps the edges).
+ *   shown(t)     with the time the frame carrying edgePending() began transmitting.
  */
 class TestPattern {
 public:
@@ -37,8 +37,8 @@ public:
     static constexpr int MAX_FLASHES = 256;
 
     struct Edge {
-        uint32_t onMs;   // millis() when the first lit frame went to show()
-        uint32_t offMs;  // millis() when the first dark frame after it went to show()
+        uint32_t onMs;   // millis() when the first lit frame began transmitting
+        uint32_t offMs;  // millis() when the first dark frame after it began transmitting
     };
 
     TestPattern() { off(); }
@@ -117,12 +117,17 @@ public:
         }
     }
 
-    /** Called right after the LEDs were handed the frame: stamps pending edges. */
+    /**
+     * Called with the millis() at which the first frame carrying the pending edge(s) began
+     * transmitting: stamps them. The LED driver can start a frame after show() returns
+     * (Nrf52PwmLedStrip queues it while the previous frame is on the wire), so the caller
+     * stamps when that frame actually starts (ILedStrip::lastStarted), not at hand-off.
+     */
     void shown(uint32_t nowMs) {
         if (pendingOn_) {
             if (recorded_ < MAX_FLASHES) edges_[recorded_].onMs = nowMs;
-            // Lit for at least onMs from the frame's real hand-off (show() can wait on the
-            // previous frame's DMA), so the off edge measures the time the LEDs were on.
+            // Lit for at least onMs from when the lit frame really started, so the off edge
+            // measures the time the LEDs were on.
             offAtMs_ = nowMs + onMs_;
             pendingOn_ = false;
         }
@@ -132,6 +137,9 @@ public:
             pendingOff_ = false;
         }
     }
+
+    /** An on or off edge waits for the frame carrying it to reach the LEDs (see shown()). */
+    bool edgePending() const { return pendingOn_ || pendingOff_; }
 
     bool active() const { return mode_ != Mode::OFF; }
     Mode mode() const { return mode_; }
