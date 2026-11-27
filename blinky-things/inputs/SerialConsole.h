@@ -266,6 +266,23 @@ public:
     static void logWarn(const __FlashStringHelper* msg);
     static void logError(const __FlashStringHelper* msg);
 
+    // Room in the USB output ring for one more stream line (#23). A data
+    // line (stream, TRANSIENT) asks before formatting; without room it is
+    // skipped and counted (streamLineDropped: json info streamDropped), so
+    // a host that stops reading never holds the loop.
+    static bool streamRoom() {
+#if BLINKY_SERIAL_OUT
+        return SerialOut::instance().roomForLine(LineBuffer::CAPACITY);
+#else
+        return true;
+#endif
+    }
+    static void streamLineDropped() {
+#if BLINKY_SERIAL_OUT
+        SerialOut::instance().lineDropped();
+#endif
+    }
+
     /// Process a command line (from USB serial, BLE NUS, or BLE broadcast).
     void handleCommand(const char* cmd);
     /// Process a command and route response to a specific output (e.g., TCP client).
@@ -353,19 +370,6 @@ private:
     uint32_t lastNNFrameCount_ = 0; // Track last emitted frame for NN stream
     bool nnStreamFirst_ = true;     // next NN line is the first since `stream nn` (skip = 0)
     uint32_t nnDroppedFc_ = 0;      // last NN frame counted as dropped (count once, #23)
-    // Room in the USB output ring for one more stream line (#23).
-    static bool streamRoom() {
-#if BLINKY_SERIAL_OUT
-        return SerialOut::instance().roomForLine(LineBuffer::CAPACITY);
-#else
-        return true;
-#endif
-    }
-    static void streamLineDropped() {
-#if BLINKY_SERIAL_OUT
-        SerialOut::instance().lineDropped();
-#endif
-    }
     uint32_t streamLastMs_ = 0;
     uint32_t batteryLastMs_ = 0;
     static const uint16_t STREAM_PERIOD_MS = 50;        // Normal: ~20Hz for audio
