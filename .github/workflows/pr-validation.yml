@@ -410,6 +410,11 @@ jobs:
     - name: Repetition consistency metric tests (#340)
       run: python -m pytest -q tests/tracker/test_consistency.py
 
+    # The equivalence gate below fails when it compared nothing (no trace rows, no valid
+    # decision), and passes or fails on the decisions themselves otherwise.
+    - name: ACF equivalence gate tests
+      run: python -m pytest -q tests/tracker/test_acf_equivalence.py
+
     - name: Build harness (UBSan and release)
       run: |
         mkdir -p build
