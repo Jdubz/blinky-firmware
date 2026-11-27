@@ -74,7 +74,7 @@ We welcome various types of contributions:
 
 - **Main sketch**: `blinky-things/blinky-things.ino`
 - **Firmware code**: subfolders of `blinky-things/` (see [blinky-things/README.md](blinky-things/README.md)). A new `.cpp` in a subfolder must be added to `BlinkyImplementations.h`, or Arduino won't compile it.
-- **Device configs**: JSON files in blinky_time's [`devices/registry/`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry) (uploaded at runtime, not compiled in)
+- **Device configs**: private JSON entries, uploaded at runtime, not compiled in, never committed (format: blinky_time's [`devices/registry/README.md`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry/README.md))
 - **Documentation**: Additional docs in `docs/` directory (index: the Documentation Index in [CLAUDE.md](CLAUDE.md))
 - **No silent fallbacks**: invalid state must fail loudly (see CLAUDE.md, "No Silent Fallbacks")
 
