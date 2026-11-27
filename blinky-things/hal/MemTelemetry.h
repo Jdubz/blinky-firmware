@@ -89,4 +89,62 @@ inline HeapInfo heap() {
 
 }  // namespace MemTelemetry
 
-#endif  // BLINKY_PLATFORM_NRF52840
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+
+// ESP32-S3: the same API and `json info` fields. ESP-IDF FreeRTOS counts stacks in
+// bytes (StackType_t is uint8_t), so stackFreeBytes() reads the same. The heap is the
+// internal-RAM heap (PSRAM is reported nowhere yet): its size, bytes in use now, and the
+// most ever in use (from the minimum free ever). ESP-IDF's heap is locked for every
+// task, so sampleHeap() may run on any task; the loop calls it ~1 Hz as on the nRF52840.
+
+#include <Arduino.h>
+#include <esp_heap_caps.h>
+
+namespace MemTelemetry {
+
+inline TaskHandle_t& loopTaskSlot() {
+    static TaskHandle_t handle = nullptr;
+    return handle;
+}
+
+inline void captureLoopTask() { loopTaskSlot() = xTaskGetCurrentTaskHandle(); }
+
+inline uint32_t stackFreeBytes(TaskHandle_t task) {
+    return static_cast<uint32_t>(uxTaskGetStackHighWaterMark(task)) * sizeof(StackType_t);
+}
+
+struct HeapInfo {
+    uint32_t total;
+    uint32_t used;
+    uint32_t peak;
+    bool valid;
+};
+
+inline HeapInfo& heapCache() {
+    static HeapInfo cache = {0, 0, 0, false};
+    return cache;
+}
+
+inline void sampleHeap() {
+    const uint32_t total = static_cast<uint32_t>(heap_caps_get_total_size(MALLOC_CAP_INTERNAL));
+    const uint32_t freeNow = static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    const uint32_t freeMin = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    vTaskSuspendAll();
+    HeapInfo& cache = heapCache();
+    cache.total = total;
+    cache.used = total - freeNow;
+    cache.peak = total - freeMin;
+    cache.valid = true;
+    xTaskResumeAll();
+}
+
+inline HeapInfo heap() {
+    vTaskSuspendAll();
+    HeapInfo h = heapCache();
+    xTaskResumeAll();
+    return h;
+}
+
+}  // namespace MemTelemetry
+
+#endif  // BLINKY_PLATFORM_NRF52840 / BLINKY_PLATFORM_ESP32S3

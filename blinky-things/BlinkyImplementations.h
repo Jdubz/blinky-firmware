@@ -54,6 +54,7 @@
 #include "hal/PlatformDetect.h"
 #ifdef BLINKY_PLATFORM_ESP32S3
   #include "hal/hardware/Esp32PdmMic.cpp"
+  #include "hal/hardware/Esp32RmtLedStrip.cpp"  // Async RMT driver (ESP32-S3)
 #endif
 
 // Input implementations

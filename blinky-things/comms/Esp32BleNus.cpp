@@ -1,4 +1,5 @@
 #include "Esp32BleNus.h"
+#include "../inputs/SerialOut.h"  // BLINKY_SERIAL (#23)
 
 // NUS UUIDs (same as nRF52840 BleNus)
 #define NUS_SERVICE_UUID "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -35,13 +36,14 @@ static NusServerCallbacks serverCb;
 static NusRxCallbacks rxCb;
 static portMUX_TYPE s_txMux = portMUX_INITIALIZER_UNLOCKED;
 
-void Esp32BleNus::begin() {
+void Esp32BleNus::begin(const char* name) {
     s_instance = this;
 
     // Idempotent: safe to call if BleAdvertiser::begin() already initialized NimBLE
     if (!NimBLEDevice::isInitialized()) {
-        NimBLEDevice::init("Blinky");
+        NimBLEDevice::init(name);
     }
+    NimBLEDevice::setDeviceName(name);  // GAP name, as the nRF52840's Bluefruit.setName()
     server_ = NimBLEDevice::createServer();
     server_->setCallbacks(&serverCb);
 
@@ -66,15 +68,37 @@ void Esp32BleNus::begin() {
     // Add NUS service UUID to advertising
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     adv->addServiceUUID(NUS_SERVICE_UUID);
-    adv->setName("Blinky");
+    adv->setName(name);
     adv->start();
 
+    Serial.print(F("BLE name: "));
+    Serial.println(name);
     Serial.println(F("[BLE] NUS service started"));
 }
 
 void Esp32BleNus::update() {
+    runQueuedCommands();
     if (connected_) {
         drainTxBuffer();
+    }
+}
+
+void Esp32BleNus::runQueuedCommands() {
+    // Bounded: lines queued while these run wait for the next loop tick.
+    for (uint8_t n = 0; n < CMD_QUEUE_DEPTH; n++) {
+        const uint8_t tail = cmdTail_;
+        if (tail == cmdHead_) break;  // empty
+        __sync_synchronize();         // read the slot only after seeing it published
+        if (lineCallback_) lineCallback_(cmdQueue_[tail]);
+        __sync_synchronize();         // finish with the slot before freeing it
+        cmdTail_ = static_cast<uint8_t>((tail + 1) % CMD_QUEUE_DEPTH);
+    }
+    const uint32_t dropped = cmdDropped_;
+    if (dropped != cmdDroppedReported_) {
+        BLINKY_SERIAL.print(F("[BLE] NUS command queue full: "));
+        BLINKY_SERIAL.print(dropped - cmdDroppedReported_);
+        BLINKY_SERIAL.println(F(" line(s) dropped"));
+        cmdDroppedReported_ = dropped;
     }
 }
 
@@ -103,10 +127,16 @@ void Esp32BleNus::onRxData(const uint8_t* data, size_t len) {
         if (c == '\n' || c == '\r') {
             if (lineLen_ > 0) {
                 lineBuf_[lineLen_] = '\0';
-                linesRx_++;
-                if (lineCallback_) {
-                    lineCallback_(lineBuf_);
+                const uint8_t head = cmdHead_;
+                const uint8_t next = static_cast<uint8_t>((head + 1) % CMD_QUEUE_DEPTH);
+                if (next == cmdTail_) {
+                    cmdDropped_ = cmdDropped_ + 1;  // full: keep order, drop the newest
+                } else {
+                    memcpy(cmdQueue_[head], lineBuf_, lineLen_ + 1);
+                    __sync_synchronize();  // slot contents visible before it's published
+                    cmdHead_ = next;
                 }
+                linesRx_++;
                 lineLen_ = 0;
             }
         } else if (lineLen_ < LINE_BUF_SIZE - 1) {
@@ -180,5 +210,7 @@ void Esp32BleNus::printDiagnostics(Print& out) const {
     size_t pending = (txHead_ >= txTail_)
         ? (txHead_ - txTail_)
         : (TX_BUF_SIZE - txTail_ + txHead_);
-    out.println(pending);
+    out.print(pending);
+    out.print(F(" cmd_dropped="));
+    out.println(cmdDropped_);
 }

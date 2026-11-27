@@ -2509,6 +2509,14 @@ def main():
 
     args = parse_args()
 
+    # The ESP32-S3 build (blinky-firmware#50) has no UF2 bootloader: its partition table is
+    # default_8MB (two OTA app slots), and it is flashed with esptool through blinky-server.
+    # The old esp32s3 profile below never ran against that layout; refuse it.
+    if args.board == "esp32s3":
+        print("ERROR: --board esp32s3 is refused: the ESP32-S3 has no UF2 bootloader in this "
+              "build; flash it with esptool through blinky-server", file=sys.stderr)
+        return 2
+
     # Activate the board profile for this run (affects VID/PID checks, etc.)
     _active_board = BOARD_PROFILES[args.board]
     if args.board != "nrf52840":
