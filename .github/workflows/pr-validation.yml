@@ -53,11 +53,24 @@ jobs:
         git diff --name-only --no-renames "$range" > changed.txt
         echo "changed ($range):"; cat changed.txt
         # What the tracker harnesses compile (g++ -MM of tracker_harness.cpp, AudioTracker,
-        # SharedSpectralAnalysis, AdaptiveMic, BlinkyAssert), their scripts, the TFLite pin
+        # SharedSpectralAnalysis, AdaptiveMic, BlinkyAssert; SerialOut.h since #85), their scripts, the TFLite pin
         # the NN harness builds against, the corpus they replay (and .gitmodules, which decides
         # what its checkout fetches), and this workflow.
-        audio='^(blinky-things/audio/|blinky-things/hal/|blinky-things/inputs/AdaptiveMic\.|blinky-things/types/BlinkyAssert\.|blinky-simulator/include/|tests/tracker/|tests/unit/test_sliding_acf\.cpp$|tools/setup_tflite_lib\.sh$|tools/firmware_toolchain\.json$|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
-        if grep -qE "$audio" changed.txt; then
+        audio='^(blinky-things/audio/|blinky-things/hal/|blinky-things/inputs/AdaptiveMic\.|blinky-things/inputs/SerialOut\.|blinky-things/types/BlinkyAssert\.|blinky-simulator/include/|tests/tracker/|tests/unit/test_sliding_acf\.cpp$|tools/setup_tflite_lib\.sh$|tools/firmware_toolchain\.json$|corpus$|\.gitmodules$|\.github/workflows/pr-validation\.yml$)'
+        # Every file the harness sources include, asked of the compiler (both builds; -MG: the
+        # NN build's TFLite headers aren't here), so a new include outside the list above
+        # still runs them.
+        for nn in "" -DBLINKY_HOST_NN; do
+          for f in tests/tracker/tracker_harness.cpp blinky-things/audio/AudioTracker.cpp \
+              blinky-things/audio/SharedSpectralAnalysis.cpp blinky-things/inputs/AdaptiveMic.cpp \
+              blinky-things/types/BlinkyAssert.cpp; do
+            g++ -std=c++17 -MM -MG -DBLINKY_HOST_HARNESS $nn -DARDUINO=10819 -DARDUINO_ARCH_NRF52 \
+              -DBLINKY_PLATFORM_NRF52840 -Iblinky-simulator/include -Iblinky-things "$f"
+          done
+        done | tr ' \\' '\n\n' | grep -E '^(blinky-things|blinky-simulator|tests)/' \
+          | xargs realpath -m --relative-to=. | sort -u > deps.txt
+        test -s deps.txt || { echo "::error::no harness dependencies found (g++ -MM)"; exit 1; }
+        if grep -qE "$audio" changed.txt || grep -qxFf deps.txt changed.txt; then
           echo "audio=true" >> "$GITHUB_OUTPUT"
           echo "audio pipeline or harness changed: the tracker harnesses run"
         else
