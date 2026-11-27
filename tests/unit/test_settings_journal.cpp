@@ -49,6 +49,13 @@ public:
         if (off % 4 != 0 || off + n * 4 > mem_.size()) { violations++; return false; }
         for (uint32_t i = 0; i < n; i++) {
             if (dead()) return false;
+            if (failAfter == 0) {
+                // The SoftDevice refused or timed out (no power loss): the
+                // words before this one landed, this call reports failure.
+                failAfter = -1;
+                return false;
+            }
+            if (failAfter > 0) failAfter--;
             const uint32_t at = off + i * 4;
             if (++writes_[at / 4] > 2) violations++;  // nWRITE
             uint32_t cur;
@@ -70,6 +77,7 @@ public:
     void fill(uint32_t page, uint8_t v) { std::memset(&mem_[page * PS], v, PS); }
 
     long powerCutAfter = -1;  // words until the power goes
+    long failAfter = -1;      // words until one program() call fails (power stays on)
     bool cut = false;
     uint32_t erases = 0;
     uint32_t violations = 0;
@@ -334,6 +342,52 @@ static void testPowerCuts() {
     CHECK(sawOld > 0);
 }
 
+// A write that fails while the power stays on (a refused or timed-out
+// SoftDevice operation, NrfJournalFlash) after any word of a save: the
+// journal leaves the torn record behind, carries the state to a fresh page,
+// keeps taking saves, and the next boot reads the newest state.
+static void testRuntimeWriteFailure() {
+    Rng r{77};
+    NorSim base(3);
+    uint8_t st[N];
+    for (auto& b : st) b = static_cast<uint8_t>(r.next());
+    {
+        SettingsJournal j(base);
+        CHECK(j.prepare(st, N));
+        for (int i = 0; i < 10; i++) { mutate(st, r, 0); j.append(st, N, false); }
+    }
+    uint8_t next[N];
+    std::memcpy(next, st, N);
+    mutate(next, r, 0);
+    int cases = 0;
+    for (long failAt = 0; failAt < 4; failAt++) {  // a delta record is 4 words
+        NorSim f = base;
+        SettingsJournal j(f);
+        CHECK(j.mount());
+        const int32_t page = j.currentPage();
+        f.failAfter = failAt;
+        CHECK(j.append(next, N, true) == SettingsJournal::Result::WRITTEN);
+        CHECK(f.failAfter == -1);  // the failure fired inside this save
+        f.failAfter = -1;
+        CHECK(j.currentPage() != page);  // carried to a fresh page, no erase needed
+        CHECK(sameAs(j, next));
+        uint8_t more[N];
+        std::memcpy(more, next, N);
+        for (int i = 0; i < 20; i++) {
+            mutate(more, r, 0);
+            CHECK(j.append(more, N, false) == SettingsJournal::Result::WRITTEN);
+        }
+        SettingsJournal boot(f);
+        CHECK(boot.mount());
+        CHECK(sameAs(boot, more));
+        CHECK(boot.prepare(more, N));
+        CHECK(f.erases == 1);  // the page with the torn record, at boot
+        CHECK(f.violations == 0);
+        cases++;
+    }
+    CHECK(cases == 4);
+}
+
 static void testLargestRuntimeWrite() {
     // The nRF backend splits writes into short chunks; here, check the
     // journal never asks for an erase from append(..., false) and that a FULL
@@ -357,6 +411,7 @@ int main() {
     testEraseWhenFull();
     testGarbageAndOldData();
     testPowerCuts();
+    testRuntimeWriteFailure();
     testLargestRuntimeWrite();
     std::printf("%d/%d checks passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
