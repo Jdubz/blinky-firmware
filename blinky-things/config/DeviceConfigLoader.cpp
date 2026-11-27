@@ -233,18 +233,18 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         bool inRange = (rOff <= 2) && (gOff <= 2) && (bOff <= 2);
         bool distinct = (rOff != gOff) && (rOff != bOff) && (gOff != bOff);
         if (!inRange || !distinct) {
-            Serial.print(F("[WARN] Invalid ledType 0x"));
-            Serial.print(stored.ledType, HEX);
-            Serial.print(F(" (decoded r="));
-            Serial.print(rOff);
-            Serial.print(F(" g="));
-            Serial.print(gOff);
-            Serial.print(F(" b="));
-            Serial.print(bOff);
-            Serial.print(F("): "));
-            Serial.println(inRange ? F("offsets must be distinct")
+            BLINKY_SERIAL.print(F("[WARN] Invalid ledType 0x"));
+            BLINKY_SERIAL.print(stored.ledType, HEX);
+            BLINKY_SERIAL.print(F(" (decoded r="));
+            BLINKY_SERIAL.print(rOff);
+            BLINKY_SERIAL.print(F(" g="));
+            BLINKY_SERIAL.print(gOff);
+            BLINKY_SERIAL.print(F(" b="));
+            BLINKY_SERIAL.print(bOff);
+            BLINKY_SERIAL.print(F("): "));
+            BLINKY_SERIAL.println(inRange ? F("offsets must be distinct")
                                    : F("offsets must be 0-2 (no RGBW)"));
-            Serial.println(F("[WARN] Valid examples: 82 (NEO_GRB), 6 (NEO_RGB)"));
+            BLINKY_SERIAL.println(F("[WARN] Valid examples: 82 (NEO_GRB), 6 (NEO_RGB)"));
             return false;
         }
     }
