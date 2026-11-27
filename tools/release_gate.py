@@ -13,9 +13,11 @@ Checks (each one must pass):
   fps          loop fps >= --min-fps (default 60: a disaster floor, not a
                quality bar)
   frametime    every 5 s loop-metrics window's longest frame (json info
-               maxFrameMs) <= --max-frame-ms (default 100; hat_v1 with music
-               peaks at 24-31 ms). A long frame freezes the visuals: settings
-               saves, blocking output, stalls (#258, #275)
+               maxFrameMs) <= --max-frame-ms (default 50; the test box measures
+               15-27 ms with saves and streaming since #49 and #23, and hat_v1
+               with music peaked at 24-31 ms before them). A long frame
+               freezes the visuals: settings saves, blocking output, stalls
+               (#258, #275)
   stability    no reboot for --stable-minutes (uptime keeps rising) and
                audioOverruns grows by at most --max-overrun-growth
   asserts      no [ASSERT] / [FALLBACK] line seen on the console
@@ -162,7 +164,7 @@ def main():
     ap.add_argument("--min-fps", type=float, default=60.0)
     ap.add_argument("--stable-minutes", type=float, default=5.0)
     ap.add_argument("--max-overrun-growth", type=int, default=5)
-    ap.add_argument("--max-frame-ms", type=int, default=100,
+    ap.add_argument("--max-frame-ms", type=int, default=50,
                     help="longest single loop frame allowed in any 5 s window (json info maxFrameMs)")
     ap.add_argument("--music-seconds", type=float, default=15.0)
     ap.add_argument("--min-level", type=float, default=0.05)
