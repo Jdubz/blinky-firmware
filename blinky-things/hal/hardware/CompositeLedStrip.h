@@ -54,9 +54,9 @@ public:
     }
 
     void show() override {
-        // Start both transmissions. With Nrf52PwmLedStrip's async DMA path
-        // each strand kicks off independently and runs concurrently on its
-        // own PWM peripheral.
+        // Hand the frame to both strands. With Nrf52PwmLedStrip each strand
+        // starts (or queues) independently on its own PWM peripheral, and
+        // the two run concurrently; neither show() waits on the wire.
         s1_->show();
         s2_->show();
     }
@@ -102,6 +102,13 @@ public:
     uint32_t Color(uint8_t r, uint8_t g, uint8_t b) const override {
         // Both strands use the same colour-packing convention.
         return s1_->Color(r, g, b);
+    }
+
+    // Frame timing follows strand 1: both strands get every show() back to back and start
+    // within microseconds of each other (the same transmit task services both).
+    uint32_t framesHanded() const override { return s1_->framesHanded(); }
+    void lastStarted(uint32_t& seq, uint32_t& startMs) const override {
+        s1_->lastStarted(seq, startMs);
     }
 
 private:

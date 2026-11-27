@@ -128,9 +128,14 @@ bool prevChargingState = false;
 FakeAudio fakeAudio;  // Synthetic 120 BPM audio for visual design/debug ("fakeaudio on/off")
 
 // Helper function for Generator-Effect-Renderer pipeline
+bool edgeFrameArmed = false;   // a test-pattern edge waits for its frame to start (#14)
+uint32_t edgeFrameSeq = 0;     // that frame's ILedStrip sequence number
+void stampStartedEdge();
+
 void renderFrame() {
   // Generate -> Effect -> Render -> Display pipeline
   if (pipeline && audioController) {
+    stampStartedEdge();  // before handing off a newer frame
     pipeline->testPattern().update(millis());
     if (fakeAudio.isEnabled()) {
       AudioControl fakeCtrl = fakeAudio.getControl();
@@ -142,9 +147,32 @@ void renderFrame() {
     const uint32_t showStartUs = micros();
     leds->show();
     LoopMetrics::noteShowUs(micros() - showStartUs);
-    // The frame is now queued to the LEDs (non-blocking DMA; they latch ~30 us/LED later):
-    // stamp any test-pattern flash edge it carries.
-    pipeline->testPattern().shown(millis());
+    // A test-pattern flash edge in this frame: remember the frame, then stamp the edge
+    // with the time that frame (or a newer one that replaced it) began transmitting.
+    TestPattern& tp = pipeline->testPattern();
+    if (tp.edgePending() && !edgeFrameArmed) {
+      edgeFrameArmed = true;
+      edgeFrameSeq = leds->framesHanded();
+    }
+    stampStartedEdge();
+  }
+}
+
+// The LED driver may start a frame after show() returns: it waits for the wire, and a newer
+// frame can replace it. Stamp the edge once the newest started frame is the edge's frame or
+// a later one. Also called before the next frame is handed off, so a started edge frame is
+// still the newest started one and its own start time is the one stamped.
+void stampStartedEdge() {
+  if (!edgeFrameArmed || !pipeline || !leds) return;
+  if (!pipeline->testPattern().edgePending()) {  // pattern turned off meanwhile
+    edgeFrameArmed = false;
+    return;
+  }
+  uint32_t seq = 0, startMs = 0;
+  leds->lastStarted(seq, startMs);
+  if ((int32_t)(seq - edgeFrameSeq) >= 0) {
+    pipeline->testPattern().shown(startMs);
+    edgeFrameArmed = false;
   }
 }
 
@@ -323,12 +351,11 @@ void setup() {
     // Initialize LED strip (must be done in setup, not global scope)
     uint16_t numLeds = config.matrix.width * config.matrix.height;
 #ifdef BLINKY_PLATFORM_NRF52840
-    // nRF52840: always use async PWM driver. RGB-only (no RGBW), targets 120+
-    // LED hardware. Non-blocking show() returns once DMA is queued instead of
-    // blocking the main loop for ~30 µs/LED (~3.6 ms at 120 LEDs, ~30 ms at
-    // 1024 LEDs) — frees that time for audio drain and FFT processing.
-    // Pre-allocated PWM pattern buffer also avoids the per-frame malloc/free
-    // that fragments the heap with Adafruit_NeoPixel.
+    // nRF52840: always use the PWM + EasyDMA driver. RGB-only (no RGBW). show()
+    // never waits on the wire (~30 µs/LED: 1.9 ms at 64 LEDs, ~30 ms at 1024):
+    // a frame starts at once when the wire is idle, else it waits in a staged
+    // copy and a transmit task starts it at SEQEND, the newest frame winning
+    // (#14, Nrf52PwmLedStrip.h). Pre-allocated buffers, no per-frame malloc.
     //
     // Verified at 1 LED on b157 fleet test chips (boot, audio loop healthy,
     // post-boot overrun rate ~0/sec). PWM timing math is count-independent
@@ -344,8 +371,7 @@ void setup() {
     //
     // Each Nrf52PwmLedStrip grabs a free PWM via findFreePwm() — nRF52840
     // has 4 PWM peripherals so a 2-strand config has plenty of headroom.
-    // The two DMAs run concurrently on hardware; CPU latency for show()
-    // is single-strand's, not 2×.
+    // The two DMAs run concurrently, so a frame's wire time halves.
     //
     // Recovery if this path crashes mid-init (the failure mode cart-inner-
     // old hit on 2026-05-14): RebootFrequencyCounter trips after 5 rapid

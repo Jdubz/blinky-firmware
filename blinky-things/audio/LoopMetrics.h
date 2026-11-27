@@ -46,7 +46,22 @@ struct State {
     uint32_t showMaxUs    = 0;
     uint32_t lastShowUs   = 0;  // mean per show() call
     uint32_t lastShowMaxUs = 0;
+    // Frames that began transmitting (counted by the LED driver's transmit task)
+    uint32_t ledStartedAtWindow = 0;
+    float    lastLedFps   = 0.0f;
 };
+
+// Written by the LED driver's transmit task (frames started) and by show() on the loop task
+// (frames replaced before they reached the wire); each has one writer, and an aligned 32-bit
+// read is atomic on the Cortex-M4.
+inline volatile uint32_t& ledStartedCount() {
+    static volatile uint32_t n = 0;
+    return n;
+}
+inline volatile uint32_t& ledSupersededCount() {
+    static volatile uint32_t n = 0;
+    return n;
+}
 
 inline State& state() {
     static State s;
@@ -110,6 +125,7 @@ inline void tick(uint32_t now) {
             s.showSumUs   = 0;
             s.showCount   = 0;
             s.showMaxUs   = 0;
+            s.ledStartedAtWindow = ledStartedCount();
             return;
         }
         s.lastFps      = s.frameCount * 1000.0f / elapsed;
@@ -124,6 +140,9 @@ inline void tick(uint32_t now) {
         s.lastWindowLenMs = elapsed;
         s.lastShowUs   = s.showCount ? s.showSumUs / s.showCount : 0;  // 0 = no show() (safe mode)
         s.lastShowMaxUs = s.showMaxUs;
+        const uint32_t started = ledStartedCount();
+        s.lastLedFps   = (started - s.ledStartedAtWindow) * 1000.0f / elapsed;
+        s.ledStartedAtWindow = started;
         s.windowStart  = now;
         s.frameCount   = 0;
         s.minFrameMs   = UINT32_MAX;
@@ -158,5 +177,15 @@ inline uint32_t getLastWindowLenMs() { return state().lastWindowLenMs; }
 // Loop time inside leds->show() over the last closed window: mean per call and max, in us.
 inline uint32_t getShowUs()        { return state().lastShowUs; }
 inline uint32_t getShowMaxUs()     { return state().lastShowMaxUs; }
+
+/// LED driver, transmit task: a frame began transmitting.
+inline void noteLedFrameStarted() { ledStartedCount() = ledStartedCount() + 1; }
+/// LED driver, loop task: show() replaced a frame still waiting for the wire (latest wins).
+inline void noteLedSuperseded() { ledSupersededCount() = ledSupersededCount() + 1; }
+// Frames that began transmitting per second over the last closed window: the LED refresh
+// rate, which on a long strip is capped by the wire (30 us per LED) below the loop's fps.
+inline float    getLedFps()        { return state().lastLedFps; }
+// Frames show() replaced before they reached the wire, since boot.
+inline uint32_t getLedSuperseded() { return ledSupersededCount(); }
 
 }  // namespace LoopMetrics

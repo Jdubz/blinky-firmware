@@ -36,6 +36,12 @@ public:
     uint8_t getBrightness() const override;
     uint16_t numPixels() const override;
     uint32_t Color(uint8_t r, uint8_t g, uint8_t b) const override;
+    // Adafruit_NeoPixel::show() transmits inside the call: every frame starts in show().
+    uint32_t framesHanded() const override { return shown_; }
+    void lastStarted(uint32_t& seq, uint32_t& startMs) const override {
+        seq = shown_;
+        startMs = shownMs_;
+    }
 
     /**
      * Check if the strip was successfully initialized
@@ -46,4 +52,6 @@ public:
 private:
     Adafruit_NeoPixel* strip_;
     bool ownsStrip_;
+    uint32_t shown_ = 0;
+    uint32_t shownMs_ = 0;
 };

@@ -21,6 +21,7 @@
 #include "../comms/RecordStream.h"
 #include "../hal/MemTelemetry.h"
 #include "../hal/MallocLock.h"
+#include "../hal/hardware/Nrf52PwmLedStrip.h"  // ledTxStackFree (#14)
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
 #include "../comms/Esp32BleNus.h"
@@ -662,6 +663,14 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         out_.print(LoopMetrics::getShowUs());
         out_.print(F(",\"showMaxUs\":"));
         out_.print(LoopMetrics::getShowMaxUs());
+        // LED refresh (#14): frames that began transmitting per second in that window, and
+        // frames replaced by a newer one before the wire was free (since boot). A strip
+        // whose wire time (30 us/LED) exceeds the loop's frame time refreshes at the wire's
+        // rate with the newest frame each time; the loop never waits for it.
+        out_.print(F(",\"ledFps\":"));
+        out_.print(LoopMetrics::getLedFps(), 1);
+        out_.print(F(",\"ledSuperseded\":"));
+        out_.print(LoopMetrics::getLedSuperseded());
 
 #ifdef BLINKY_PLATFORM_NRF52840
         // Stack / heap headroom (#186, #187). Stack values are the minimum
@@ -681,6 +690,8 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             }
             out_.print(F(",\"cmdStackFree\":"));
             out_.print(MemTelemetry::stackFreeBytes(nullptr));
+            out_.print(F(",\"ledTxStackFree\":"));
+            out_.print(Nrf52PwmLedStrip::txStackFreeBytes());
             if (recordStream_ && recordStream_->senderTask()) {
                 out_.print(F(",\"recStackFree\":"));
                 out_.print(MemTelemetry::stackFreeBytes(recordStream_->senderTask()));
