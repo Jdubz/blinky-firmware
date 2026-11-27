@@ -9,11 +9,17 @@
 # "Hardware test (staging)" status on the commit. A PR staging -> master
 # needs that status.
 #
+# The artifact carries the XIAO ESP32-S3 build too (blinky-firmware#50):
+# blinky-things-b<N>-esp32s3.bin (the full flash image, written at 0x0) and
+# blinky-things-b<N>-esp32s3.app.bin, listed in manifest.json (`files`,
+# `platforms`, the `esp32s3` block) like the nRF52840's hex and UF2.
+#
 # It also posts the "Firmware fingerprint" status: one sha256 over the hex and
 # UF2 that `package` makes from the sketch compiled with every per-commit field
-# fixed (scripts/build.sh --fingerprint). Those are exactly the files a staging
-# build or candidate ships, so two commits with the same fingerprint put the
-# same image on a device: the box skips the hardware suite for a head whose
+# fixed (scripts/build.sh --fingerprint), and the ESP32-S3 full flash image
+# built the same way. Those are exactly the images a staging build or candidate
+# ships, so two commits with the same fingerprint put the same image on a
+# device: the box skips the hardware suite for a head whose
 # fingerprint equals the one master was last merged from, and release.yml cuts
 # no candidate for one equal to the newest bN's. That image is never uploaded.
 #
@@ -65,6 +71,18 @@ jobs:
         pip install adafruit-nrfutil pyserial
         bash scripts/setup_toolchain.sh
 
+    # The ESP32-S3's own pinned toolchain (.arduino-esp32s3). A commit from before the
+    # ESP32-S3 build (no pin file) builds the nRF52840 alone.
+    - name: Install pinned ESP32-S3 toolchain
+      id: s3
+      run: |
+        if [ ! -f tools/firmware_toolchain_esp32s3.json ]; then
+          echo "::notice title=ESP32-S3::this commit has no ESP32-S3 toolchain pin; nRF52840 only"
+          exit 0
+        fi
+        bash scripts/setup_toolchain.sh --target esp32s3
+        echo "enabled=true" >> "$GITHUB_OUTPUT"
+
     # Fixed version fields and its own build/cache paths (scripts/build.sh): shares no
     # object with the real build below. A commit from before --fingerprint has none.
     - name: Fingerprint build
@@ -75,6 +93,13 @@ jobs:
           exit 0
         fi
         bash scripts/build.sh --fingerprint
+        s3=()
+        if [ "${{ steps.s3.outputs.enabled }}" = "true" ]; then
+          bash scripts/build.sh --esp32 --fingerprint
+          python tools/firmware_release.py check-esp32s3 --dir /tmp/blinky-fingerprint-esp32s3/out \
+            --version b0-fingerprint-00000000
+          s3=(blinky-things-b0-esp32s3.bin)
+        fi
         # The same validators and UF2 conversion as the real package step; the manifest
         # (version, toolchain) is not part of the fingerprint.
         python tools/firmware_release.py package --dev \
@@ -82,14 +107,19 @@ jobs:
           --build 0 --sha 0000000000000000000000000000000000000000 \
           --out /tmp/blinky-fingerprint/dist --toolchain-json '{}' \
           --libraries-json /tmp/blinky-fingerprint/out/libraries.json
-        fp=$(cd /tmp/blinky-fingerprint/dist && sha256sum blinky-things-b0.hex blinky-things-b0.uf2 | sha256sum | cut -d' ' -f1)
+        if [ "${#s3[@]}" -gt 0 ]; then
+          cp /tmp/blinky-fingerprint-esp32s3/out/blinky-things.ino.merged.bin "/tmp/blinky-fingerprint/dist/${s3[0]}"
+        fi
+        fp=$(cd /tmp/blinky-fingerprint/dist && sha256sum blinky-things-b0.hex blinky-things-b0.uf2 "${s3[@]}" | sha256sum | cut -d' ' -f1)
         [[ "$fp" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::bad fingerprint '$fp'"; exit 1; }
         echo "fingerprint=$fp" >> "$GITHUB_OUTPUT"
         echo "::notice title=Fingerprint::sha256:$fp"
 
     # --dev: no bump, version b<N>-dev-<sha8> from BUILD_NUMBER and the commit.
     - name: Build firmware
-      run: bash scripts/build.sh --dev
+      run: |
+        bash scripts/build.sh --dev
+        if [ "${{ steps.s3.outputs.enabled }}" = "true" ]; then bash scripts/build.sh --esp32 --dev; fi
 
     - name: Package and validate
       env:
@@ -101,11 +131,18 @@ jobs:
         TC=$(jq -c --arg tflite "$TFLITE_REF" --arg cli "$(arduino-cli version | head -1)" \
                '{core: .core, libraries: .libraries, fqbn: .fqbn, tflite_ref: $tflite, arduino_cli: $cli}' \
                tools/firmware_toolchain.json)
+        s3=()
+        if [ "${{ steps.s3.outputs.enabled }}" = "true" ]; then
+          TC_S3=$(jq -c --arg cli "$(arduino-cli version | head -1)" \
+                    '{core: .core, libraries: .libraries, fqbn: .fqbn, arduino_cli: $cli}' \
+                    tools/firmware_toolchain_esp32s3.json)
+          s3=(--esp32s3-dir /tmp/blinky-build-esp32s3 --esp32s3-toolchain-json "$TC_S3")
+        fi
         python tools/firmware_release.py package --dev \
           --hex /tmp/blinky-build/blinky-things.ino.hex \
           --build "$N" --sha "$SHA" \
           --out dist --toolchain-json "$TC" \
-          --libraries-json /tmp/blinky-build/libraries.json
+          --libraries-json /tmp/blinky-build/libraries.json "${s3[@]}"
         # The firmware must report exactly the manifest's version.
         want=$(jq -r .version dist/manifest.json)
         grep -q "\"$want\"" blinky-things/types/Version.h || {

@@ -6,7 +6,11 @@
 # hardware test ("Hardware test (staging)" status), with the same tree.
 # Builds it with the pinned toolchain, validates it with the same checks the
 # deploy paths run, and publishes a GitHub PRE-release `b<N>` with hex, UF2
-# and manifest.json, its notes linking the hardware report. Candidates are never
+# and manifest.json, its notes linking the hardware report. The same commit's
+# XIAO ESP32-S3 build ships next to it (blinky-firmware#50, its own pinned
+# toolchain): blinky-things-b<N>-esp32s3.bin (full flash image, at 0x0) and
+# blinky-things-b<N>-esp32s3.app.bin, in manifest.json's `files`, `platforms`
+# and `esp32s3` block. Candidates are never
 # signed for OTA: sign-release.yml signs a release only after its bench gate
 # passes (dispatched by release_promote.py). A candidate reaches no
 # device except listed test devices until it passes the bench gate
@@ -190,9 +194,25 @@ jobs:
         pip install adafruit-nrfutil pyserial
         bash scripts/setup_toolchain.sh
 
+    # A master commit from before the ESP32-S3 build (no pin file) ships the nRF52840 alone.
+    - name: Install pinned ESP32-S3 toolchain
+      if: steps.once.outputs.skip != 'true'
+      id: s3
+      run: |
+        if [ ! -f tools/firmware_toolchain_esp32s3.json ]; then
+          echo "::notice title=ESP32-S3::this commit has no ESP32-S3 toolchain pin; nRF52840 only"
+          exit 0
+        fi
+        bash scripts/setup_toolchain.sh --target esp32s3
+        echo "enabled=true" >> "$GITHUB_OUTPUT"
+
     - name: Build firmware
       if: steps.once.outputs.skip != 'true'
-      run: bash scripts/build.sh --build ${{ steps.num.outputs.build }}
+      run: |
+        bash scripts/build.sh --build ${{ steps.num.outputs.build }}
+        if [ "${{ steps.s3.outputs.enabled }}" = "true" ]; then
+          bash scripts/build.sh --esp32 --build ${{ steps.num.outputs.build }}
+        fi
 
     - name: Package and validate
       if: steps.once.outputs.skip != 'true'
@@ -202,11 +222,18 @@ jobs:
         TC=$(jq -c --arg tflite "$TFLITE_REF" --arg cli "$(arduino-cli version | head -1)" \
                '{core: .core, libraries: .libraries, fqbn: .fqbn, tflite_ref: $tflite, arduino_cli: $cli}' \
                tools/firmware_toolchain.json)
+        s3=()
+        if [ "${{ steps.s3.outputs.enabled }}" = "true" ]; then
+          TC_S3=$(jq -c --arg cli "$(arduino-cli version | head -1)" \
+                    '{core: .core, libraries: .libraries, fqbn: .fqbn, arduino_cli: $cli}' \
+                    tools/firmware_toolchain_esp32s3.json)
+          s3=(--esp32s3-dir /tmp/blinky-build-esp32s3 --esp32s3-toolchain-json "$TC_S3")
+        fi
         python tools/firmware_release.py package \
           --hex /tmp/blinky-build/blinky-things.ino.hex \
           --build ${{ steps.num.outputs.build }} --sha "$SHA" \
           --out dist --toolchain-json "$TC" \
-          --libraries-json /tmp/blinky-build/libraries.json
+          --libraries-json /tmp/blinky-build/libraries.json "${s3[@]}"
         ls -la dist
 
     - name: Release notes
@@ -221,6 +248,10 @@ jobs:
           echo
           echo "Hardware test (staging) passed on \`${{ steps.hw.outputs.head }}\`: ${{ steps.hw.outputs.url }}"
           echo
+          if [ -f "dist/blinky-things-b$N-esp32s3.bin" ]; then
+            echo "Also the XIAO ESP32-S3 build (next gen, not on the fleet; the box's hardware test covers the nRF52840): \`blinky-things-b$N-esp32s3.bin\` (full flash image at 0x0) and \`blinky-things-b$N-esp32s3.app.bin\`."
+            echo
+          fi
           if [ -n "$PREV" ]; then
             old=$(git show "$PREV:blinky-things/config/ConfigStorage.h" | grep -oE 'SETTINGS_VERSION = [0-9]+' | grep -oE '[0-9]+')
             new=$(grep -oE 'SETTINGS_VERSION = [0-9]+' blinky-things/config/ConfigStorage.h | grep -oE '[0-9]+')
