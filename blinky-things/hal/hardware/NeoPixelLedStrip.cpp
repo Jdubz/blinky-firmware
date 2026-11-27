@@ -28,6 +28,8 @@ void NeoPixelLedStrip::begin() {
 
 void NeoPixelLedStrip::show() {
     if (strip_) {
+        shown_++;
+        shownMs_ = millis();
         strip_->show();
     }
 }

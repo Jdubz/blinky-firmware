@@ -76,6 +76,15 @@ Set by `ledType` in the device config (a number; see blinky_time's [`devices/reg
 
 RGBW types are rejected: the driver uses 3 bytes per pixel.
 
+### LED output (nRF52840)
+
+`hal/hardware/Nrf52PwmLedStrip` drives each strand from a PWM peripheral over EasyDMA: one 16-bit duty value per LED bit, 1.25 µs each, so a frame takes **30 µs per LED** on the wire (1.9 ms at 64 LEDs, 11.5 ms at 384, 30.7 ms at 1024), plus a 300 µs latch. One pin can't go faster.
+
+- **The loop never waits on the wire (#14).** `show()` copies the frame to a staged buffer (3 B/LED) and wakes a transmit task above the loop. With the wire idle, the task encodes the frame and starts it before `show()` returns. While the previous frame is still going out, the frame waits and the PWM's SEQEND interrupt starts it the moment the wire frees. A newer `show()` replaces a waiting frame, so the wire always carries the newest frame, back to back. `json info`: `showUs`/`showMaxUs` is loop time in `show()`, `ledFps` the frames that began transmitting per second, `ledSuperseded` the frames replaced before reaching the wire (since boot).
+- **Strands:** `ledPin2` splits the pixels across two PWM instances that transmit together, halving the wire time. The chip has four PWM instances, one per strand.
+- **RAM is the limit on long strips.** The heap costs about **71 B per LED** on top of a fixed base: the 48 B/LED duty pattern, 3 B each for the render buffer, staged copy and pixel matrix, 4 B for the LED map, plus the rest. On the box, `heapUsed` is 157,944 B at 64 LEDs and 180,556 B at 384, against a `heapTotal` of 182,984 B. That puts the ceiling at **about 420 LEDs per chip** today. A 1024-LED strand doesn't fit: the duty pattern alone is 48 KB. Options, outstanding: I2S output at 4 bits per LED bit (12 B/LED, as in Zephyr's `ws2812_i2s`); the renderer writing straight into the output buffer, so the render buffer and pixel matrix stop being duplicates; or a smaller audio footprint.
+- **The render is the next limit on long strips.** On the box, loop frames average 5.5 ms at 64 LEDs and 15.7 ms at 384, so each LED costs about 30 µs (generators, effects, mapping, encode). That projects to roughly 30 fps at 1024 LEDs, even though the loop no longer waits on the wire.
+
 ## Installation Notes
 
 ### Zigzag Matrix Wiring

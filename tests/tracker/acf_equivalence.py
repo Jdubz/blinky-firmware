@@ -16,7 +16,9 @@ it over the corpus at the device's level and reports, per track and overall:
 
 and lists every decision where an integer choice differs. Fails (exit 1) if
 any integer choice differs or a continuous value is off by more than
---max-period-f / --max-phase: the decisions must be the old ones.
+--max-period-f / --max-phase: the decisions must be the old ones. Also fails
+if there is no track, or a track traces no valid decision (the trace hook
+unwired, or a tracker that never decides): nothing compared is not a pass.
 
     python tests/tracker/acf_equivalence.py --harness build/tracker_harness [--tracks ...]
 """
@@ -51,6 +53,7 @@ def main() -> int:
     tot = {"n": 0, "same": 0, "dpf": 0.0, "dph": 0.0, "dacc": 0.0, "dstr": 0.0}
     diffs: list[str] = []
     lags: set[int] = set()
+    empty: list[str] = []
     print(f"{'track':32s} {'decisions':>9s} {'identical':>9s} {'dPeriodF':>9s} {'dPhase':>9s} "
           f"{'dAccent':>9s} {'dStrength':>9s} {'lag':>5s}")
     with tempfile.TemporaryDirectory() as tmp:
@@ -61,7 +64,12 @@ def main() -> int:
             trace = tmpd / f"{stem}.acf.csv"
             subprocess.run([args.harness, str(pcm), str(tmpd / "out.csv"), str(args.fps), "0.25", "1",
                             f"--acf-trace={trace}"], check=True)
-            d = np.genfromtxt(trace, delimiter=",", names=True)
+            # atleast_1d: a one-row trace would otherwise load as a 0-d record.
+            d = np.atleast_1d(np.genfromtxt(trace, delimiter=",", names=True))
+            if d.size == 0 or int(np.sum(d["new_valid"] == 1)) == 0:
+                empty.append(stem)
+                print(f"{stem:32s} no valid decision traced", flush=True)
+                continue
             ints = ["valid", "period", "mult", "src"]
             same = np.ones(len(d), dtype=bool)
             for k in ints:
@@ -94,7 +102,13 @@ def main() -> int:
     if diffs:
         print("Decisions whose integer choice differs:")
         print("\n".join(diffs))
-    failed = bool(diffs) or tot["dpf"] > args.max_period_f or tot["dph"] > args.max_phase
+    if not stems:
+        print(f"[GATE FAIL] no tracks in {CORPUS}")
+    if empty:
+        print(f"[GATE FAIL] no valid tempo decision traced on: {', '.join(empty)} "
+              f"(is the harness's --acf-trace hook wired?)")
+    failed = (bool(diffs) or not stems or bool(empty)
+              or tot["dpf"] > args.max_period_f or tot["dph"] > args.max_phase)
     if failed:
         print("[GATE FAIL] the spread, table-driven decisions must equal the old batch decisions")
     return 1 if failed else 0
