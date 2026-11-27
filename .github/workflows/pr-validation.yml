@@ -464,10 +464,10 @@ jobs:
     - name: UBSan stress (silence, gap, clip, noise, hum, clicks at 15/60/250 fps)
       run: python tests/tracker/run_stress.py --harness build/tracker_harness_ubsan
 
-    # CPU cost model calibrated to hat_v1 (tests/tracker/README.md). The
+    # CPU cost model calibrated to porkpie_hat (tests/tracker/README.md). The
     # device build (NN off) must leave the renderer its frame rate: 177 fps
     # simulated, matching the hat's measured 179 fps.
-    # Frame cost: 3.2 ms measured on hat_v1 before the onset STFT (#178),
+    # Frame cost: 3.2 ms measured on porkpie_hat before the onset STFT (#178),
     # plus an estimated 2 x 0.7 ms for its two frames until timed on device.
     - name: Frame-rate gate (device build, hat CPU cost model)
       run: |
@@ -481,7 +481,7 @@ jobs:
         fi
 
     # The corpus plays at the device's level (run_tracker_eval.py --level-db,
-    # default -50 dB re the mastered file, int16): hat_v1's mic peaks at
+    # default -50 dB re the mastered file, int16): porkpie_hat's mic peaks at
     # ~0.003 FS with music, and file-level testing hid a detector that fired
     # nothing on the device (#280). Floors sit just under the device-level
     # baseline on edm/ at 35/60/90 fps: excess 0.081, tempo 0.678, recall

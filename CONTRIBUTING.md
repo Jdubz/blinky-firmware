@@ -175,7 +175,7 @@ If applicable, add visual documentation of your changes.
 
 ```markdown
 **Hardware Configuration**
-- Device ID: [e.g. hat_v1, from `json info`]
+- Device ID: [e.g. porkpie_hat, from `json info`]
 - Board: [nRF52840 XIAO Sense]
 - LEDs: [Count and type]
 - Power: [Battery/USB/External]

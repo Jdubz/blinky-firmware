@@ -12,21 +12,21 @@ Current registered devices (see blinky_time's [`devices/registry/`](https://gith
 
 | Device | Layout | Notes |
 |--------|--------|-------|
-| `hat_v1` | 89×1 string | Wearable, battery. The release test device |
+| `porkpie_hat` | 89×1 string | Wearable, battery. The release test device |
 | `sourpuss_hat` | 70×1 string | Wearable, battery |
 | `shannon_hat` | 79×1 string | Wearable, battery, `ledPin=0` |
 | `scarf` | 141×1 string | Wearable, battery, `ledPin=0` |
-| `tube_v2` | 4×15 zigzag matrix | Standalone tube |
-| `long_tube_v1` | 4×60 zigzag matrix | Sealed sculpture |
-| `bucket_v3` | 16×8 matrix | Standalone bucket |
-| `big_bucket_v1` | 14×8 matrix | `ledPin=0`, `ledType=6` (RGB), sealed |
+| `tube` | 4×15 zigzag matrix | Standalone tube |
+| `long_tube` | 4×60 zigzag matrix | Sealed sculpture |
+| `bucket` | 16×8 matrix | Standalone bucket |
+| `big_bucket` | 14×8 matrix | `ledPin=0`, `ledType=6` (RGB), sealed |
 | `cart_inner` | 104×1 string | Lemon-cart, two channels (`ledPin=10`, `ledPin2=9`) |
 | `cart_outer` | 96×1 string | Lemon-cart |
-| `cart_umbrella_v1` | 8×13 matrix | Lemon-cart umbrella |
-| `testbox_grid_v1` | 8×8 matrix, orientation 5 (`HORIZONTAL_ROTATED_180`) | Test box chip (Sense Plus 87DE9B58C90AFE2D); a test device, see [Test box LED grid](#test-box-led-grid) |
-| `display_v1` | 32×32 matrix | Bench display; ESP32-S3 hardware with no firmware path today |
+| `cart_umbrella` | 8×13 matrix | Lemon-cart umbrella |
+| `testbox_grid` | 8×8 matrix, orientation 5 (`HORIZONTAL_ROTATED_180`) | Test box chip (Sense Plus 87DE9B58C90AFE2D); a test device, see [Test box LED grid](#test-box-led-grid) |
+| `display` | 32×32 matrix | Bench display; ESP32-S3 hardware with no firmware path today |
 
-Default LED data pin is **D10**. `big_bucket_v1`, `scarf` and `shannon_hat` use D0. `cart_inner` adds a second channel on D9 for its split topology.
+Default LED data pin is **D10**. `big_bucket`, `scarf` and `shannon_hat` use D0. `cart_inner` adds a second channel on D9 for its split topology.
 
 ## Bootloader and flashing
 
@@ -50,7 +50,7 @@ The XIAO's 3.3 V regulator supplies about 250 mA, enough only for a short, dim s
 
 ### Test box LED grid
 
-The test box chip (a XIAO nRF52840 Sense Plus, 87DE9B58C90AFE2D; device config `testbox_grid_v1`, listed in `devices/test_devices.json`) drives an 8x8 WS2812 grid. As wired and checked on the rig (2026-11-23):
+The test box chip (a XIAO nRF52840 Sense Plus, 87DE9B58C90AFE2D; device config `testbox_grid`, listed in `devices/test_devices.json`) drives an 8x8 WS2812 grid. As wired and checked on the rig (2026-11-23):
 - The chip sits in a XIAO Debug Mate with its own USB-C on the hub. Data comes from D10 through the Debug Mate's D10 header pin. In Seeed's Debug Mate V1.0 KiCad netlist every D0–D10 header pin is a direct trace to the socket (nothing else on the net) except D6/D7, which go through the UART analog switch. The header's GND pin is the XIAO's GND net (`XIAO_5V-`, the low side of the Debug Mate's power-meter shunt).
 - The grid runs from its own external 5 V supply, not from the XIAO or the Debug Mate.
 - 3.3 V data drives this grid directly; no level shifter is needed.
@@ -72,7 +72,7 @@ The test box chip (a XIAO nRF52840 Sense Plus, 87DE9B58C90AFE2D; device config `
 ### Color Order Configuration
 Set by `ledType` in the device config (a number; see blinky_time's [`devices/registry/README.md`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry/README.md)):
 - `82` = `NEO_GRB + NEO_KHZ800`: standard WS2812B, the fleet default
-- `6` = `NEO_RGB`: `big_bucket_v1`, whose LEDs are wired native RGB
+- `6` = `NEO_RGB`: `big_bucket`, whose LEDs are wired native RGB
 
 RGBW types are rejected: the driver uses 3 bytes per pixel.
 

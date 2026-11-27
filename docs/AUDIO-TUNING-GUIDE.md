@@ -233,7 +233,7 @@ Their numbers are directly comparable. The harness's `recall` column is a separa
 
 The click-measured lag is the latency correction (the scorer's `latency_ms`). The scorer's own nearest-onset estimate is printed as `est` but not applied: on the b216 run it was off by up to 89 ms, where a fine lag scan agreed with the clicks. A run whose clicks weren't detected is reported and left out of the means.
 
-**b216 baseline on hat_v1** (`device_eval.py`, 18 tracks × 35 s, stream off, ±100 ms): **F1 0.653, P 0.581, R 0.800**, F1@50 0.466. Weakest: edm-trap-electro 0.45, trance-infected-vibes 0.45 (both precision ≈ 0.3), techno-machine-drum 0.52.
+**b216 baseline on porkpie_hat** (`device_eval.py`, 18 tracks × 35 s, stream off, ±100 ms): **F1 0.653, P 0.581, R 0.800**, F1@50 0.466. Weakest: edm-trap-electro 0.45, trance-infected-vibes 0.45 (both precision ≈ 0.3), techno-machine-drum 0.52.
 
 ---
 
@@ -243,7 +243,7 @@ The click-measured lag is the latency correction (the scorer's `latency_ms`). Th
 
 **SuperFlux on the onset STFT + the online picker, NN off on devices (#280, #20).** Drum metrics on edm/: kick + snare labels aligned per track, ±50 ms, host harness. Snare labels are provisional (#284). See `docs/AUDIO_ARCHITECTURE.md` "Onset Detection" for the table.
 
-**Test at the device's level.** hat_v1 with music peaks at about 0.0028 FS, roughly −50 dB below the mastered corpus. Evaluate with the corpus scaled to that level and re-quantized to int16, not at file level. λ = 100, chosen from a −20 to +10 dB test, produced no onsets at all on the hat.
+**Test at the device's level.** porkpie_hat with music peaks at about 0.0028 FS, roughly −50 dB below the mastered corpus. Evaluate with the corpus scaled to that level and re-quantized to int16, not at file level. λ = 100, chosen from a −20 to +10 dB test, produced no onsets at all on the hat.
 
 `fluxdelta` = 8 was chosen for the onset STFT at device level (−50 dB, 35/60/90 fps) as the largest δ that keeps kick recall at the previous baseline (0.789): δ 8 gives kick R 0.799, snare R 0.629, drum F 0.640, lone hats 25 %, `repS` 0.715; δ 7 gives 0.830 / 0.684 / 0.652 / 32 % / 0.717. Higher δ trades recall for on-drum share. The full sweep is in `OnsetDetector.h`.
 

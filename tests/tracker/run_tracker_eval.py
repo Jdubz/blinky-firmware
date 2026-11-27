@@ -100,7 +100,7 @@ WARMUP_S = 10.0
 STRONG = 0.8
 TOL_S = 0.05
 # Playback level, dB re the decoded (mastered) file. The corpus peaks near
-# full scale, but the device's mic does not: hat_v1 with music peaks at
+# full scale, but the device's mic does not: porkpie_hat with music peaks at
 # ~0.0028-0.004 FS, about -50 dB. Testing at file level hid that the
 # first SuperFlux lambda produced no onsets at all on the device (#280), so
 # the default is the device's level; the PCM is re-quantized to int16 after
