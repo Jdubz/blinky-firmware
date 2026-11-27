@@ -25,7 +25,7 @@ Candidates and `--dev` builds go only through `tools/deploy_local.py` to a test 
 
 ## Branches: staging before master (#349)
 
-**Feature PRs target `staging` (the default branch), never `master`.** `master` takes only PRs from `staging`, after the box's hardware report on the staging head passes (`docs/RELEASE_PROCESS.md`, "Staging"). The box opens that PR and auto-merges it with a merge commit (never squash: master's tree must be the tested tree).
+**Feature PRs target `staging` (the default branch), never `master`.** A firmware PR merges only once the box's hardware checks pass on its head (`Hardware test (PR)`, required by the `staging` ruleset; drafts are skipped until they're ready). `master` takes only PRs from `staging`, after the box's hardware report on the staging head passes (`docs/RELEASE_PROCESS.md`, "Staging"). The box opens that PR and auto-merges it with a merge commit (never squash: master's tree must be the tested tree).
 
 ## CRITICAL: Only stable releases reach fleet and new devices
 
@@ -59,7 +59,7 @@ Use `--dry-run` first. If an identity check refuses the drive, the bootloader ti
 
 blinky-server owns all serial/BLE connections on its host — no port contention. Its safety model is blinky_time's `docs/SAFETY.md`; BLE DFU details are in blinky_time's `docs/BLUETOOTH_IMPLEMENTATION_PLAN.md`.
 
-**The test box** (its blinky-server, deployer and staging runner) is blinky_time's; its rules are in that repo's `CLAUDE.md`. Here, what matters is that the box's staging runner tests this repo's `staging` head and posts the `Hardware test (staging)` status that `master` requires.
+**The test box** (its blinky-server, deployer and staging runner) is blinky_time's; its rules are in that repo's `CLAUDE.md`. Here, what matters is that the box's PR queue posts `Hardware test (PR)` on each firmware PR's head (required on `staging`), and its staging runner confirms or runs those checks on the `staging` head and posts the `Hardware test (staging)` status that `master` requires.
 
 **Risky firmware:** always test on unenclosed bare chips first (reset button + SWD pads accessible). Installed devices have no physical access.
 
