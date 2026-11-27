@@ -23,7 +23,16 @@ public:
 
     void show() override {
         showCount_++;
+        startedMs_ = mockNowMs_;  // the mock "transmits" inside show(), like a blocking driver
     }
+
+    uint32_t framesHanded() const override { return (uint32_t)showCount_; }
+    void lastStarted(uint32_t& seq, uint32_t& startMs) const override {
+        seq = (uint32_t)showCount_;
+        startMs = startedMs_;
+    }
+    // The time show() stamps as the frame's start (tests set it).
+    void setMockNowMs(uint32_t ms) { mockNowMs_ = ms; }
 
     void setPixelColor(uint16_t index, uint8_t r, uint8_t g, uint8_t b) override {
         if (index < numPixels_) {
@@ -92,4 +101,6 @@ private:
     uint8_t brightness_;
     int showCount_;
     bool begun_;
+    uint32_t mockNowMs_ = 0;
+    uint32_t startedMs_ = 0;
 };

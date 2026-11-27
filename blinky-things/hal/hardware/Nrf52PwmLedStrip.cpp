@@ -2,7 +2,42 @@
 
 #ifdef BLINKY_PLATFORM_NRF52840
 
-#include <Arduino.h>
+#include "../../audio/LoopMetrics.h"
+
+Nrf52PwmLedStrip* volatile Nrf52PwmLedStrip::byPwm_[PWM_COUNT] = {nullptr, nullptr, nullptr, nullptr};
+TaskHandle_t Nrf52PwmLedStrip::txTask_ = nullptr;
+
+static_assert(PWM_COUNT == 4, "nRF52840 MDK: PWM0..PWM3");
+
+namespace {
+
+NRF_PWM_Type* const kPwm[4] = {NRF_PWM0, NRF_PWM1, NRF_PWM2, NRF_PWM3};
+const IRQn_Type kPwmIrq[4] = {PWM0_IRQn, PWM1_IRQn, PWM2_IRQn, PWM3_IRQn};
+
+// Encode table: one nibble (MSB first) -> four duty values, as two little-endian words
+// (the lower halfword goes out first). 6|0x8000 = T0H, 13|0x8000 = T1H (see the header).
+#define BLINKY_H(bit) ((bit) ? 0x800DUL : 0x8006UL)
+#define BLINKY_NIB(v) BLINKY_H((v) & 8) | (BLINKY_H((v) & 4) << 16), BLINKY_H((v) & 2) | (BLINKY_H((v) & 1) << 16)
+const uint32_t kNibble[32] = {
+    BLINKY_NIB(0),  BLINKY_NIB(1),  BLINKY_NIB(2),  BLINKY_NIB(3),
+    BLINKY_NIB(4),  BLINKY_NIB(5),  BLINKY_NIB(6),  BLINKY_NIB(7),
+    BLINKY_NIB(8),  BLINKY_NIB(9),  BLINKY_NIB(10), BLINKY_NIB(11),
+    BLINKY_NIB(12), BLINKY_NIB(13), BLINKY_NIB(14), BLINKY_NIB(15),
+};
+#undef BLINKY_NIB
+#undef BLINKY_H
+static_assert(sizeof(kNibble) / sizeof(kNibble[0]) == 32, "nibble table: 16 nibbles x 2 words");
+
+}  // namespace
+
+static_assert((6 | 0x8000) == 0x8006 && (13 | 0x8000) == 0x800D, "kNibble must match T0H/T1H");
+
+extern "C" {
+void PWM0_IRQHandler(void) { Nrf52PwmLedStrip::onPwmIrq(0); }
+void PWM1_IRQHandler(void) { Nrf52PwmLedStrip::onPwmIrq(1); }
+void PWM2_IRQHandler(void) { Nrf52PwmLedStrip::onPwmIrq(2); }
+void PWM3_IRQHandler(void) { Nrf52PwmLedStrip::onPwmIrq(3); }
+}
 
 // ---------------------------------------------------------------------------
 // Construction / Destruction
@@ -11,8 +46,10 @@
 Nrf52PwmLedStrip::Nrf52PwmLedStrip(uint16_t numPixels, int16_t pin, uint32_t ledType)
     : numPixels_(numPixels), pin_(pin), brightness_(0),
       rOffset_(0), gOffset_(0), bOffset_(0),
-      pixels_(nullptr), pwmBuffer_(nullptr), pwmBufferLen_(0),
-      pwm_(nullptr), begun_(false), transmitting_(false) {
+      pixels_(nullptr), staged_(nullptr), pwmBuffer_(nullptr), pwmBufferLen_(0),
+      pwm_(nullptr), pwmIndex_(-1), begun_(false), metricsOwner_(false),
+      onWire_(false), stagedFresh_(false),
+      handedSeq_(0), stagedSeq_(0), startedSeq_(0), startedMs_(0) {
 
     // Decode the NEO_* ledType byte layout (see header). Mask to lower 8
     // bits — the upper bits hold the 400/800 KHz speed selector which this
@@ -47,24 +84,39 @@ Nrf52PwmLedStrip::Nrf52PwmLedStrip(uint16_t numPixels, int16_t pin, uint32_t led
         return;
     }
 
-    uint32_t numBytes = (uint32_t)numPixels * 3;
+    const uint32_t numBytes = (uint32_t)numPixels * 3;
     pixels_ = new(std::nothrow) uint8_t[numBytes];
-    if (pixels_) {
-        memset(pixels_, 0, numBytes);
-    }
+    staged_ = new(std::nothrow) uint8_t[numBytes];
+    if (pixels_) memset(pixels_, 0, numBytes);
+    if (staged_) memset(staged_, 0, numBytes);
 
-    // Each byte = 8 PWM values (uint16_t), plus 2 end markers
-    pwmBufferLen_ = numBytes * 8 + 2;
+    // 8 duty values per byte, then the reset tail. EasyDMA reads RAM only: heap is RAM.
+    pwmBufferLen_ = numBytes * 8 + RESET_PERIODS;
     pwmBuffer_ = new(std::nothrow) uint16_t[pwmBufferLen_];
+    if (pwmBuffer_) {
+        for (uint32_t i = numBytes * 8; i < pwmBufferLen_; i++) pwmBuffer_[i] = DUTY_LOW;
+    }
+    if (!pixels_ || !staged_ || !pwmBuffer_) {
+        Serial.print(F("[ERROR] Nrf52PwmLedStrip: out of heap for "));
+        Serial.print(numPixels);
+        Serial.print(F(" LEDs (needs "));
+        Serial.print(numBytes * 2 + pwmBufferLen_ * 2);
+        Serial.println(F(" bytes)"));
+    }
 }
 
 Nrf52PwmLedStrip::~Nrf52PwmLedStrip() {
     if (pwm_) {
-        waitForDma();
+        stagedFresh_ = false;  // nothing new starts (the task runs only while the loop waits)
+        while (onWire_) vTaskDelay(1);
+        pwm_->INTENCLR = PWM_INTENCLR_SEQEND0_Msk;
+        NVIC_DisableIRQ(kPwmIrq[pwmIndex_]);
+        byPwm_[pwmIndex_] = nullptr;
         pwm_->ENABLE = 0;
         pwm_->PSEL.OUT[0] = 0xFFFFFFFFUL;
     }
     delete[] pwmBuffer_;
+    delete[] staged_;
     delete[] pixels_;
 }
 
@@ -74,26 +126,39 @@ Nrf52PwmLedStrip::~Nrf52PwmLedStrip() {
 
 void Nrf52PwmLedStrip::begin() {
     if (begun_) return;
-    if (!pixels_ || !pwmBuffer_) {
+    if (!isValid()) {
         Serial.println(F("[ERROR] Nrf52PwmLedStrip: buffer alloc failed"));
         return;
     }
 
-    // PWM SEQ[n].CNT is 15 bits (max 32767). Each LED = 24 PWM values + 2 end markers.
-    // Max LEDs per sequence = (32767 - 2) / 24 = 1365.
-    // Check before claiming PWM peripheral to avoid leaking the slot on error.
+    // PWM SEQ[n].CNT is 15 bits (max 32767): 24 duty values per LED plus the reset tail.
+    // Check before claiming the PWM peripheral to avoid leaking the slot on error.
     if (pwmBufferLen_ > 32767) {
         Serial.print(F("[ERROR] Too many LEDs for PWM DMA ("));
         Serial.print(numPixels_);
-        Serial.println(F(", max 1365)"));
+        Serial.print(F(", max "));
+        Serial.print((32767 - RESET_PERIODS) / 24);
+        Serial.println(F(")"));
         return;
     }
 
-    pwm_ = findFreePwm();
-    if (!pwm_) {
+    // One transmit task serves every strip. Above the loop (it must start a waiting frame
+    // the moment the wire frees, not when the loop next yields), equal to the core's
+    // callback task, below Bluefruit. It runs ~0.5 ms per frame at 1024 LEDs.
+    if (!txTask_) {
+        if (xTaskCreate(txTaskMain, "ledtx", 256, nullptr, TASK_PRIO_NORMAL, &txTask_) != pdPASS) {
+            txTask_ = nullptr;
+            Serial.println(F("[ERROR] Nrf52PwmLedStrip: transmit task creation failed (out of heap); LEDs stay dark"));
+            return;
+        }
+    }
+
+    pwmIndex_ = findFreePwm();
+    if (pwmIndex_ < 0) {
         Serial.println(F("[ERROR] No free PWM peripheral for LED strip"));
         return;
     }
+    pwm_ = kPwm[pwmIndex_];
 
     // Configure PWM — persistent, not re-done per frame
     pwm_->MODE = (PWM_MODE_UPDOWN_Up << PWM_MODE_UPDOWN_Pos);
@@ -113,13 +178,31 @@ void Nrf52PwmLedStrip::begin() {
 #endif
     pwm_->PSEL.OUT[0] = gpio;
     pwm_->ENABLE = 1;
+
+    // SEQEND interrupt: the ISR only marks the wire free and wakes the task. Lowest app
+    // priority (7, the PDM's level; 0, 1 and 4 belong to the SoftDevice), at or below
+    // configMAX_SYSCALL_INTERRUPT_PRIORITY (2) as FreeRTOS FromISR calls require.
+    vTaskSuspendAll();
+    metricsOwner_ = true;
+    for (uint8_t i = 0; i < PWM_COUNT; i++) {
+        if (byPwm_[i]) metricsOwner_ = false;
+    }
+    byPwm_[pwmIndex_] = this;
+    xTaskResumeAll();
+    pwm_->EVENTS_SEQEND[0] = 0;
+    pwm_->INTENSET = PWM_INTENSET_SEQEND0_Msk;
+    NVIC_ClearPendingIRQ(kPwmIrq[pwmIndex_]);
+    NVIC_SetPriority(kPwmIrq[pwmIndex_], PWM_IRQ_PRIORITY);
+    NVIC_EnableIRQ(kPwmIrq[pwmIndex_]);
     begun_ = true;
 
     Serial.print(F("[INFO] Nrf52PwmLedStrip: ready, pin=D"));
     Serial.print(pin_);
     Serial.print(F(" (GPIO 0x"));
     Serial.print(gpio, HEX);
-    Serial.print(F("), "));
+    Serial.print(F("), PWM"));
+    Serial.print(pwmIndex_);
+    Serial.print(F(", "));
     Serial.print(numPixels_);
     Serial.print(F(" LEDs, PWM buf="));
     Serial.print(pwmBufferLen_ * 2);
@@ -128,7 +211,23 @@ void Nrf52PwmLedStrip::begin() {
 
 void Nrf52PwmLedStrip::show() {
     if (!begun_) return;
-    convertAndTransmit();
+    const uint32_t bytes = (uint32_t)numPixels_ * 3;
+    // Hold the scheduler (not interrupts) so the transmit task can't read a half-copied frame.
+    vTaskSuspendAll();
+    if (stagedFresh_ && metricsOwner_) LoopMetrics::noteLedSuperseded();
+    memcpy(staged_, pixels_, bytes);
+    handedSeq_ = handedSeq_ + 1;
+    stagedSeq_ = handedSeq_;
+    stagedFresh_ = true;
+    xTaskResumeAll();
+    xTaskNotifyGive(txTask_);  // higher priority: with the wire idle it starts the frame now
+}
+
+void Nrf52PwmLedStrip::lastStarted(uint32_t& seq, uint32_t& startMs) const {
+    vTaskSuspendAll();  // the task writes the pair; read it whole
+    seq = startedSeq_;
+    startMs = startedMs_;
+    xTaskResumeAll();
 }
 
 void Nrf52PwmLedStrip::setPixelColor(uint16_t index, uint8_t r, uint8_t g, uint8_t b) {
@@ -178,67 +277,83 @@ uint32_t Nrf52PwmLedStrip::Color(uint8_t r, uint8_t g, uint8_t b) const {
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 
-bool Nrf52PwmLedStrip::isTransmitting() const {
-    return transmitting_ && pwm_ && !pwm_->EVENTS_SEQEND[0];
+uint32_t Nrf52PwmLedStrip::txStackFreeBytes() {
+    return txTask_ ? (uint32_t)uxTaskGetStackHighWaterMark(txTask_) * sizeof(StackType_t) : 0;
 }
 
 // ---------------------------------------------------------------------------
-// Internal
+// Transmit path
 // ---------------------------------------------------------------------------
 
-void Nrf52PwmLedStrip::convertAndTransmit() {
-    // Wait for any previous DMA to complete before overwriting the PWM buffer
-    waitForDma();
+void Nrf52PwmLedStrip::onPwmIrq(uint8_t instance) {
+    NRF_PWM_Type* p = kPwm[instance];
+    if (!p->EVENTS_SEQEND[0]) return;
+    p->EVENTS_SEQEND[0] = 0;
+    (void)p->EVENTS_SEQEND[0];  // read back: the clear lands before the ISR returns (no re-entry)
+    Nrf52PwmLedStrip* s = byPwm_[instance];
+    if (s) s->onWire_ = false;
+    BaseType_t woken = pdFALSE;
+    if (txTask_) vTaskNotifyGiveFromISR(txTask_, &woken);
+    portYIELD_FROM_ISR(woken);
+}
 
-    // Convert GRB pixel bytes → PWM duty-cycle pattern
-    uint32_t numBytes = (uint32_t)numPixels_ * 3;
-    uint16_t pos = 0;
-    for (uint32_t n = 0; n < numBytes; n++) {
-        uint8_t pix = pixels_[n];
-        for (uint8_t mask = 0x80; mask; mask >>= 1) {
-            pwmBuffer_[pos++] = (pix & mask) ? T1H : T0H;
+void Nrf52PwmLedStrip::txTaskMain(void*) {
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);  // show() or SEQEND
+        for (uint8_t i = 0; i < PWM_COUNT; i++) {
+            Nrf52PwmLedStrip* s = byPwm_[i];
+            if (s) s->serviceFromTask();
         }
     }
-    // End-of-sequence markers
-    pwmBuffer_[pos++] = 0x8000;
-    pwmBuffer_[pos++] = 0x8000;
+}
 
-    // Point DMA at the buffer and start
+void Nrf52PwmLedStrip::serviceFromTask() {
+    // The loop (the only show() caller) runs below this task, and copies into staged_ with
+    // the scheduler held, so staged_ is whole here and can't change during the encode.
+    if (onWire_ || !stagedFresh_) return;
+    encodeStaged();
+    stagedFresh_ = false;
+    startedSeq_ = stagedSeq_;
+    startedMs_ = millis();
+    onWire_ = true;  // before SEQSTART: the ISR clears it
     pwm_->SEQ[0].PTR = (uint32_t)pwmBuffer_;
-    pwm_->SEQ[0].CNT = pos;
-    pwm_->EVENTS_SEQEND[0] = 0;
+    pwm_->SEQ[0].CNT = pwmBufferLen_;
     pwm_->TASKS_SEQSTART[0] = 1;
-    transmitting_ = true;
+    if (metricsOwner_) LoopMetrics::noteLedFrameStarted();
 }
 
-void Nrf52PwmLedStrip::waitForDma() {
-    if (!transmitting_ || !pwm_) return;
-    while (!pwm_->EVENTS_SEQEND[0]) {
-        vTaskDelay(1);  // yield() is a no-op on Adafruit nRF52 core
+void Nrf52PwmLedStrip::encodeStaged() {
+    // Two table words per nibble: 4 stores per byte instead of 8 compare-and-stores.
+    // pwmBuffer_ comes from new[] (8-byte aligned), and each byte fills 16 bytes.
+    const uint32_t numBytes = (uint32_t)numPixels_ * 3;
+    uint32_t* out = reinterpret_cast<uint32_t*>(pwmBuffer_);
+    const uint8_t* in = staged_;
+    for (uint32_t n = 0; n < numBytes; n++) {
+        const uint8_t v = in[n];
+        const uint32_t* hi = &kNibble[(v >> 4) * 2];
+        const uint32_t* lo = &kNibble[(v & 0x0F) * 2];
+        out[0] = hi[0];
+        out[1] = hi[1];
+        out[2] = lo[0];
+        out[3] = lo[1];
+        out += 4;
     }
-    pwm_->EVENTS_SEQEND[0] = 0;
-    transmitting_ = false;
+    // The reset tail after the data was written once at construction and never changes.
 }
 
-NRF_PWM_Type* Nrf52PwmLedStrip::findFreePwm() {
-    NRF_PWM_Type* devices[] = {
-        NRF_PWM0, NRF_PWM1, NRF_PWM2
-#if defined(NRF_PWM3)
-        , NRF_PWM3
-#endif
-    };
-
-    for (unsigned int i = 0; i < sizeof(devices) / sizeof(devices[0]); i++) {
-        NRF_PWM_Type* p = devices[i];
-        if ((p->ENABLE == 0) &&
+int8_t Nrf52PwmLedStrip::findFreePwm() {
+    for (uint8_t i = 0; i < PWM_COUNT; i++) {
+        NRF_PWM_Type* p = kPwm[i];
+        if (byPwm_[i] == nullptr &&
+            (p->ENABLE == 0) &&
             (p->PSEL.OUT[0] & PWM_PSEL_OUT_CONNECT_Msk) &&
             (p->PSEL.OUT[1] & PWM_PSEL_OUT_CONNECT_Msk) &&
             (p->PSEL.OUT[2] & PWM_PSEL_OUT_CONNECT_Msk) &&
             (p->PSEL.OUT[3] & PWM_PSEL_OUT_CONNECT_Msk)) {
-            return p;
+            return (int8_t)i;
         }
     }
-    return nullptr;
+    return -1;
 }
 
 #endif // BLINKY_PLATFORM_NRF52840
