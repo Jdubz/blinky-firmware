@@ -52,7 +52,10 @@ track's clean audio repeats one lag later, does the same hit fire again?
 Usage:
     python tests/tracker/run_tracker_eval.py --harness build/tracker_harness.exe \
         [--compare build/tracker_old.exe] [--tracks techno-minimal-01 ...] \
-        [--fps 35 60 90] [--ffmpeg path/to/ffmpeg]
+        [--fps 35 60 90] [--ffmpeg path/to/ffmpeg] [--jobs N]
+
+Tracks run concurrently, one process each, --jobs at a time (default: the CPU count); the
+output is in corpus order and the same as with --jobs 1.
 
 ffmpeg is needed to decode the corpus mp3s (falls back to imageio_ffmpeg).
 """
@@ -65,6 +68,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -89,6 +93,7 @@ from blinky_scoring.drum_scoring import (  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from consistency import Repetition, consistency, find_repetition  # noqa: E402
+from parallel import DEFAULT_JOBS, map_tracks  # noqa: E402
 
 CORPUS = REPO / "corpus" / "edm"  # the blinky-corpus submodule
 WARMUP_S = 10.0
@@ -232,6 +237,44 @@ def evaluate(rows: np.ndarray, onsets: np.ndarray) -> dict:
     }
 
 
+def eval_track(stem: str, args: argparse.Namespace, ffmpeg: str,
+               builds: list[tuple[str, str]]) -> tuple[list[str], dict[str, list[dict]]]:
+    """One track at every fps for every build: its printed lines and its per-run results."""
+    mp3 = CORPUS / f"{stem}.mp3"
+    gt = json.loads((CORPUS / f"{stem}.onsets_consensus.json").read_text())
+    onsets = np.array(sorted(o["time"] for o in gt["onsets"] if o["strength"] >= STRONG))
+    pgt = CORPUS / f"{stem}.pattern_gt.json"
+    gt_bpm = json.loads(pgt.read_text()).get("groundTruthBpm") if pgt.exists() else None
+    drums = load_drum_labels(drum_label_path(CORPUS, stem),
+                             CORPUS / f"{stem}.onsets_consensus.json")
+    lines: list[str] = []
+    results: dict[str, list[dict]] = {b: [] for b, _ in builds}
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpd = Path(tmp)
+        pcm = tmpd / f"{stem}.pcm"
+        rep = find_repetition(decode(ffmpeg, mp3, pcm, args.level_db))
+        bar = f", a 4-beat bar is {240.0 / gt_bpm:.3f} s" if gt_bpm else ""
+        lines.append(f"# {stem}: repeat lag {rep.lag_s:.3f} s{bar}")
+        for fps in args.fps:
+            cells = []
+            for b, exe in builds:
+                rows = run_harness(exe, pcm, tmpd / f"{stem}_{b}.csv", fps, args.jitter, args.seed,
+                                   (args.harness_args + args.harness_opt) if b == "new" else None)
+                r = evaluate(rows, onsets)
+                r.update(onset_f1(rows, gt["onsets"]))
+                r.update(drum_metrics(rows, drums))
+                r.update(repetition_metrics(rows, rep))
+                r["tempo"] = tempo_score(rows, gt_bpm)
+                r["has_gt_bpm"] = bool(gt_bpm)
+                r["label"] = f"{stem}@{fps:.0f}fps"
+                results[b].append(r)
+                cells.append(f"{r['kick_r50']:8.2f} {r['on_drum']:9.2f} {r['drum_f']:8.3f} "
+                             f"{r['snare_r50']:7.2f} {r['rep_s']:8.2f} {r['rep_cov']:7.2f} {r['rep_n']:5d} {r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} "
+                             f"{r['f1']:7.3f} {r['prec']:8.3f} {r['bpm']:8.1f}")
+            lines.append(f"{stem:32s} {fps:5.0f} " + "  ".join(cells))
+    return lines, results
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--harness", required=True)
@@ -241,6 +284,8 @@ def main() -> int:
     ap.add_argument("--jitter", type=float, default=0.25)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--ffmpeg")
+    ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS,
+                    help="tracks run at once, one process each (default: the CPU count)")
     ap.add_argument("--level-db", type=float, default=DEVICE_LEVEL_DB,
                     help=f"playback level, dB re the decoded file (default {DEVICE_LEVEL_DB:g}: "
                          "the device mic's level with music; 0 = file level)")
@@ -267,41 +312,17 @@ def main() -> int:
     builds = [("new", args.harness)] + ([("old", args.compare)] if args.compare else [])
 
     summary: dict[str, list] = {b: [] for b, _ in builds}
-    with tempfile.TemporaryDirectory() as tmp:
-        tmpd = Path(tmp)
-        print(f"{'track':32s} {'fps':>5s} " + "  ".join(
-            f"{b+':kR50':>8s} {b+':onDrum':>9s} {b+':drumF':>8s} {b+':sR50':>7s} {b+':repS':>8s} {b+':cov':>7s} {b+':n':>5s} "
-            f"{b+':exc':>8s} {b+':tmp':>8s} {b+':worst':>9s} {b+':rec':>7s} {b+':f1':>7s} "
-            f"{b+':prec':>8s} {b+':bpm':>8s}" for b, _ in builds))
-        for stem in stems:
-            mp3 = CORPUS / f"{stem}.mp3"
-            gt = json.loads((CORPUS / f"{stem}.onsets_consensus.json").read_text())
-            onsets = np.array(sorted(o["time"] for o in gt["onsets"] if o["strength"] >= STRONG))
-            pgt = CORPUS / f"{stem}.pattern_gt.json"
-            gt_bpm = json.loads(pgt.read_text()).get("groundTruthBpm") if pgt.exists() else None
-            drums = load_drum_labels(drum_label_path(CORPUS, stem),
-                                     CORPUS / f"{stem}.onsets_consensus.json")
-            pcm = tmpd / f"{stem}.pcm"
-            rep = find_repetition(decode(ffmpeg, mp3, pcm, args.level_db))
-            bar = f", a 4-beat bar is {240.0 / gt_bpm:.3f} s" if gt_bpm else ""
-            print(f"# {stem}: repeat lag {rep.lag_s:.3f} s{bar}", flush=True)
-            for fps in args.fps:
-                cells = []
-                for b, exe in builds:
-                    rows = run_harness(exe, pcm, tmpd / f"{stem}_{b}.csv", fps, args.jitter, args.seed,
-                                       (args.harness_args + args.harness_opt) if b == "new" else None)
-                    r = evaluate(rows, onsets)
-                    r.update(onset_f1(rows, gt["onsets"]))
-                    r.update(drum_metrics(rows, drums))
-                    r.update(repetition_metrics(rows, rep))
-                    r["tempo"] = tempo_score(rows, gt_bpm)
-                    r["has_gt_bpm"] = bool(gt_bpm)
-                    r["label"] = f"{stem}@{fps:.0f}fps"
-                    summary[b].append(r)
-                    cells.append(f"{r['kick_r50']:8.2f} {r['on_drum']:9.2f} {r['drum_f']:8.3f} "
-                                 f"{r['snare_r50']:7.2f} {r['rep_s']:8.2f} {r['rep_cov']:7.2f} {r['rep_n']:5d} {r['excess']:8.2f} {r['tempo']:8.2f} {r['worst20s']:9.2f} {r['recall']:7.2f} "
-                                 f"{r['f1']:7.3f} {r['prec']:8.3f} {r['bpm']:8.1f}")
-                print(f"{stem:32s} {fps:5.0f} " + "  ".join(cells), flush=True)
+    print(f"{'track':32s} {'fps':>5s} " + "  ".join(
+        f"{b+':kR50':>8s} {b+':onDrum':>9s} {b+':drumF':>8s} {b+':sR50':>7s} {b+':repS':>8s} {b+':cov':>7s} {b+':n':>5s} "
+        f"{b+':exc':>8s} {b+':tmp':>8s} {b+':worst':>9s} {b+':rec':>7s} {b+':f1':>7s} "
+        f"{b+':prec':>8s} {b+':bpm':>8s}" for b, _ in builds), flush=True)  # before the workers fork
+    # Tracks run concurrently (one process each, --jobs at a time); each track's lines print
+    # in corpus order as it completes, and the results are the same as one at a time.
+    for lines, results in map_tracks(partial(eval_track, args=args, ffmpeg=ffmpeg, builds=builds),
+                                     stems, args.jobs):
+        print("\n".join(lines), flush=True)
+        for b, rs in results.items():
+            summary[b].extend(rs)
     print()
     for b, rs in summary.items():
         arr = lambda k: np.nanmean([r[k] for r in rs])
