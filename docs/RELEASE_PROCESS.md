@@ -2,7 +2,7 @@
 
 **Rule:** only firmware that passed CI *and* a bench gate reaches fleet or new devices. Broken and in-flight changes stay on test chips.
 
-**Why:** until 2026-10-20, `deploy.sh` and `tools/deploy_local.py` compiled whatever was in the local working tree, uncommitted changes included, and flashed it. b210 (NN drain-loop livelock, 12 fps) and b211 (mic silenced by a noise gate) both reached hat_v1 that way.
+**Why:** until 2026-10-20, `deploy.sh` and `tools/deploy_local.py` compiled whatever was in the local working tree, uncommitted changes included, and flashed it. b210 (NN drain-loop livelock, 12 fps) and b211 (mic silenced by a noise gate) both reached porkpie_hat that way.
 
 ## Channels
 
@@ -12,7 +12,9 @@
 | **candidate** | GitHub *pre-release* `bN`, built by CI from a green master commit | One listed test device at a time, until gated |
 | **dev** | Local build of a clean tree, version `bN-dev-<sha>` | `--dev`, one listed test device |
 
-Test devices are listed in `devices/test_devices.json`: `hat_v1` (the bench hat) and `testbox_grid_v1` (the test box's Sense Plus with its 8x8 grid, `docs/HARDWARE.md`). Being a test device is a deliberate property of the device, not where it happens to be plugged in. Candidates and dev builds are refused for every other device.
+Test devices are listed in `devices/test_devices.json`: `porkpie_hat` (the bench hat) and `testbox_grid` (the test box's Sense Plus with its 8x8 grid, `docs/HARDWARE.md`). Being a test device is a deliberate property of the device, not where it happens to be plugged in. Candidates and dev builds are refused for every other device.
+
+Device ids carry no version since 2026-11-27 (blinky_time's `devices/registry/README.md`): the bench hat was `hat_v1` and is now `porkpie_hat`. Until its config is uploaded again it still reports `hat_v1`, and `deploy_local.py` and `release_gate.py` refuse it either way (the id doesn't match, or isn't a test device). Before its next gate or dev build, upload `devices/registry/porkpie_hat.json` to it over USB (`device upload`, as that README says) and wait 75 s before any reset. The test box's chip takes `testbox_grid` by itself.
 
 ## Staging (blinky_time#349)
 
@@ -84,7 +86,7 @@ Changing the toolchain means editing the pin files, re-running `setup_toolchain.
 
 ### 2. Bench gate (test device)
 ```bash
-python tools/release_gate.py bN --port COM3 --device-id hat_v1
+python tools/release_gate.py bN --port COM3 --device-id porkpie_hat
 ```
 Flashes the candidate through `deploy_local.py --release bN`, then checks:
 
@@ -92,8 +94,8 @@ Flashes the candidate through `deploy_local.py --release bN`, then checks:
 |---|---|
 | version | `json info` reports exactly the manifest version |
 | configured | `device.configured` true, same `device.id` |
-| fps | ≥ 60 for the whole window (`--min-fps`). A disaster floor (b210 shipped at 12 fps), not a quality bar: hat_v1 runs about 100–175 fps with music on both b214 and b215. What matters is timing: see frametime below (#258). |
-| frametime | every 5 s window's longest frame (`json info` `maxFrameMs`) ≤ 50 ms (`--max-frame-ms`); a long frame is a visible freeze (#258, #275). The rule is that LEDs never drop frames. The known stalls are fixed (settings saves no longer erase flash at run time, #49; JSON streaming no longer blocks the loop, #23), and the test box measures 15–27 ms in every window, saves and streaming included; hat_v1 with music peaked at 24–31 ms before those fixes. 50 ms keeps about 2× headroom over the worst seen. It matches blinky_time's strict `frame_time` rule, which blocks the box's hardware checks at the same limit (2026-11-26). |
+| fps | ≥ 60 for the whole window (`--min-fps`). A disaster floor (b210 shipped at 12 fps), not a quality bar: porkpie_hat runs about 100–175 fps with music on both b214 and b215. What matters is timing: see frametime below (#258). |
+| frametime | every 5 s window's longest frame (`json info` `maxFrameMs`) ≤ 50 ms (`--max-frame-ms`); a long frame is a visible freeze (#258, #275). The rule is that LEDs never drop frames. The known stalls are fixed (settings saves no longer erase flash at run time, #49; JSON streaming no longer blocks the loop, #23), and the test box measures 15–27 ms in every window, saves and streaming included; porkpie_hat with music peaked at 24–31 ms before those fixes. 50 ms keeps about 2× headroom over the worst seen. It matches blinky_time's strict `frame_time` rule, which blocks the box's hardware checks at the same limit (2026-11-26). |
 | stability | no reboot for 5 min (`--stable-minutes`); `audioOverruns` grows ≤ 5 |
 | asserts | no `[ASSERT]` / `[FALLBACK]` on the console |
 | music | with music playing (it prompts): level mean ≥ 0.05, ≥ 1 pulse onset/s |
@@ -106,7 +108,7 @@ For a candidate cut from a staging merge, the box's staging suite already ran th
 
 ### 3. Promote
 ```bash
-python tools/release_promote.py bN --operator-confirmed "smooth, reactive on hat_v1"   # or answer the prompt
+python tools/release_promote.py bN --operator-confirmed "smooth, reactive on porkpie_hat"   # or answer the prompt
 ```
 Without a bench-gate record, Promote writes `gate-staging.json` to the release: the staging head's hardware report (it checks the release commit merges that head with the same tree, and that the status passed) plus the operator's visual confirmation. Then, either way:
 

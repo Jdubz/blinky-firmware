@@ -262,14 +262,14 @@ Every tunable (serial name, default, range, saved or runtime) is listed in one p
 
 ## Onset Detection: spectral flux on devices; FrameOnsetNN off
 
-**The NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0`, `AudioTracker.h`). Onset pulses come from SuperFlux. The first comparison, on all onsets (onsets_consensus, ±50 ms, host harness CPU cost model calibrated to hat_v1, `tests/tracker/README.md`), is kept for the frame-rate cost:
+**The NN is off on devices** (`BLINKY_ONSET_NN_ENABLED=0`, `AudioTracker.h`). Onset pulses come from SuperFlux. The first comparison, on all onsets (onsets_consensus, ±50 ms, host harness CPU cost model calibrated to porkpie_hat, `tests/tracker/README.md`), is kept for the frame-rate cost:
 
 | Detector (onsets_consensus, ±50 ms, cost model) | F1 | Precision | Recall | LED fps |
 |---|---|---|---|---|
 | Spectral flux (pre-#280 picker) | 0.546 | 0.457 | 0.679 | 178 |
 | v33 NN (50 mel, 19.6 KB, **12 ms/inference** on device) | 0.480 | 0.394 | 0.613 | 48 |
 
-Those are all-onset numbers; detectors are now scored on drums (kick + snare labels aligned per track, ±50 ms, host harness at 60 fps, no cost model; #280). **The corpus plays at the device's level:** hat_v1's mic peaks at about 0.003 FS with music, about −50 dB re the mastered files, re-quantized to int16. Drum F at −60 / −50 / −40 dB; the other columns at −50 dB:
+Those are all-onset numbers; detectors are now scored on drums (kick + snare labels aligned per track, ±50 ms, host harness at 60 fps, no cost model; #280). **The corpus plays at the device's level:** porkpie_hat's mic peaks at about 0.003 FS with music, about −50 dB re the mastered files, re-quantized to int16. Drum F at −60 / −50 / −40 dB; the other columns at −50 dB:
 
 | Detector | Picker | drum F (−60 / −50 / −40 dB) | on-drum | kick R | snare R* | det/s | noise det/s |
 |---|---|---|---|---|---|---|---|
@@ -284,15 +284,15 @@ Those are all-onset numbers; detectors are now scored on drums (kick + snare lab
 
 The NN is shelved on the nRF52840: on accuracy it ties flux, and a tie goes to flux (blinky_time [`docs/ML_IMPROVEMENT_PLAN.md`](https://github.com/Jdubz/blinky_time/blob/master/docs/ML_IMPROVEMENT_PLAN.md), 2026-11-03). The host NN harness (`BLINKY_HOST_NN`) keeps the NN path tested in CI. The section below describes the NN for that case.
 
-**Drain-loop livelock (b208-b210, fixed):** `update()` used to keep processing samples that arrived *during* a ~12 ms inference. Every frame looked like the newest, so the NN ran on every frame and starved the renderer: hat_v1 b210 ran at 12 fps with 62.4 inferences/s. `update()` now drains only what was waiting at entry and runs at most one inference. CI gates on simulated fps with and without the NN.
+**Drain-loop livelock (b208-b210, fixed):** `update()` used to keep processing samples that arrived *during* a ~12 ms inference. Every frame looked like the newest, so the NN ran on every frame and starved the renderer: porkpie_hat b210 ran at 12 fps with 62.4 inferences/s. `update()` now drains only what was waiting at entry and runs at most one inference. CI gates on simulated fps with and without the NN.
 
-**No noise gate, no level-based silence detection (2026-10-20).** This MEMS mic is so weak that music sits at the level a fixed gate calls silence: the b200 gate (0.002) equalled the measured average music level of a mic with enclosure holes, and on hat_v1 it silenced music entirely. It was removed once before (2025-12-26) for the same reason. With the hardware gain fixed at its SNR optimum, the normalizer adapts to whatever is there.
+**No noise gate, no level-based silence detection (2026-10-20).** This MEMS mic is so weak that music sits at the level a fixed gate calls silence: the b200 gate (0.002) equalled the measured average music level of a mic with enclosure holes, and on porkpie_hat it silenced music entirely. It was removed once before (2025-12-26) for the same reason. With the hardware gain fixed at its SNR optimum, the normalizer adapts to whatever is there.
 
 Silence detection went with it. At device-like levels on edm/, an adaptive noise floor falsely reset tempo 487–2159 times in music. Never resetting gave 0 false resets and re-locked on a new song as fast or faster. Instead, **rhythm needs hits**: `rhythmStrength` and `plpPulse` fade out 2–4 s after the last onset, and the next onset restores them instantly. Room noise fires no flux onsets, so the rhythm outputs drop to 0 within 5 s after music stops (they read 0.45–0.77 without this). In music the fade engages 2.1% of the time, mostly in percussion-free breakdowns.
 
 ## FrameOnsetNN — off on devices, see above
 
-`FrameOnsetNN` (`audio/FrameOnsetNN.h`) runs a TFLite Micro INT8 model on a sliding window of mel frames. The embedded model (`audio/frame_onset_model_data.h`) is the v33 export: 50 mel bands (30-8000 Hz, `SpectralConstants::NUM_MEL_BANDS`), 20,056 bytes, about 12 ms per inference on hat_v1. Its single output is an onset activation. It detects acoustic onsets (kicks, snares, other hits), not metrical beats.
+`FrameOnsetNN` (`audio/FrameOnsetNN.h`) runs a TFLite Micro INT8 model on a sliding window of mel frames. The embedded model (`audio/frame_onset_model_data.h`) is the v33 export: 50 mel bands (30-8000 Hz, `SpectralConstants::NUM_MEL_BANDS`), 20,056 bytes, about 12 ms per inference on porkpie_hat. Its single output is an onset activation. It detects acoustic onsets (kicks, snares, other hits), not metrical beats.
 
 In NN builds it only drives onset detection. It never feeds the rhythm sources (#155). If the model fails to initialize, `BLINKY_ASSERT` reports it (no silent fallback).
 
@@ -412,8 +412,8 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 
 | Component | RAM | CPU Time | Notes |
 |-----------|-----|----------|-------|
-| Spectral frame (FFT, compressor, mel, flux) | a few KB | ~3.2 ms/frame on hat_v1 (before #20) | |
-| Onset STFT (2 × Hann 512 FFT + SuperFlux per frame, #20) | ~6 KB (ring, FFT buffers, window, weights) | **2.7 ms per 16 ms spectral frame, ~17% CPU** (measured on hat_v1, 2026-11-05; twice the 1.4 ms estimate). No dropped frames: the loop held 134–142 fps, longest frame 30 ms | harness cost model `--frame-cost-us=4600` (3.2 ms + the old estimate) |
+| Spectral frame (FFT, compressor, mel, flux) | a few KB | ~3.2 ms/frame on porkpie_hat (before #20) | |
+| Onset STFT (2 × Hann 512 FFT + SuperFlux per frame, #20) | ~6 KB (ring, FFT buffers, window, weights) | **2.7 ms per 16 ms spectral frame, ~17% CPU** (measured on porkpie_hat, 2026-11-05; twice the 1.4 ms estimate). No dropped frames: the loop held 134–142 fps, longest frame 30 ms | harness cost model `--frame-cost-us=4600` (3.2 ms + the old estimate) |
 | Rhythm buffers | ~22 KB | - | 7 float arrays of 792 (OSS, bass, level, their linear copies, epoch-fold copy) |
 | Incremental ACF tables | ~26 KB (3 × 6.5 KB + 6.5 KB head/tail sums) | ~0.27 ms per frame (3 × 404 lags × ~14 cycles, two SMLALs each; code estimate) | `acfStageUs[6]` (update) |
 | Scratch buffers | ~4 KB | - | 4 × 264 floats, class members so they stay off the 4 KB loop stack |

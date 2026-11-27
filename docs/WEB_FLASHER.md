@@ -31,7 +31,7 @@ The update never goes through the bootloader's UF2 drive or its BLE DFU service;
 6. **Verify.** The page finds the device again by chip serial number, checks it, restores runtime settings and saves, then reports success. It watches the first 75 s of uptime in the background and speaks up only if the device restarts.
 
 Why this route:
-- **The UF2 drive can't work for a person on Windows** with bootloader 0.8.0-10. Windows writes `System Volume Information` as the drive mounts, and the bootloader's stuck-transfer check drops the drive 8.5 s later (measured on hat_v1). A bootloader fix (0.8.0-11) exists but is parked; see [Recovery](#recovery).
+- **The UF2 drive can't work for a person on Windows** with bootloader 0.8.0-10. Windows writes `System Volume Information` as the drive mounts, and the bootloader's stuck-transfer check drops the drive 8.5 s later (measured on porkpie_hat). A bootloader fix (0.8.0-11) exists but is parked; see [Recovery](#recovery).
 - **Chrome can't use the bootloader's BLE DFU.** Its Web Bluetooth GATT blocklist bans Nordic legacy DFU (`00001530-…`).
 - **This route avoids both,** and it doesn't erase anything until a verified image is waiting.
 
@@ -103,7 +103,7 @@ Firebase: /firmware/index.json + /firmware/bN/blinky-things-bN.{hex,uf2,bin,otam
 
 With 0.8.0-11 the drive would also stop timing out back to the app when nothing is copied. It would wait for a file, a reset or an unplug, as upstream Adafruit does. CLAUDE.md and `deploy_local.py`'s messages would have to change with that rollout.
 
-## Bench results (hat_v1, 2026-10-20): what they established
+## Bench results (porkpie_hat, 2026-10-20): what they established
 
 - **QSPI Quad Enable must be set.** With QE=0 every staged image read back wrong (`ota selftest` CRC mismatch, `ota commit` → `readback-mismatch`, old firmware kept running). `QspiOtaStaging::begin()` now sets QE once (non-volatile) and fails loudly if it can't.
 - **The firmware's refusals work on hardware:** wrong key → `bad-signature`, older build → `not-newer`, garbage → `bad-magic`, commit with nothing staged → `not-complete`.
@@ -114,7 +114,7 @@ With 0.8.0-11 the drive would also stop timing out back to the app when nothing 
 
 The page went live (USB) on 2026-10-21 (blinky_time PR #266), after item 1 and a real end-to-end update by a person (bench results). What's still open:
 
-1. ✅ Done (b215). Merge; cut a candidate (`release.yml`); gate it on hat_v1 (`release_gate.py`); promote it (`release_promote.py`, which has `sign-release.yml` sign it). The mirror then carries the first signed release.
+1. ✅ Done (b215). Merge; cut a candidate (`release.yml`); gate it on porkpie_hat (`release_gate.py`); promote it (`release_promote.py`, which has `sign-release.yml` sign it). The mirror then carries the first signed release.
 2. **Open.** Get that release onto devices once by the existing routes (`deploy.sh` for the fleet, `deploy_local.py` for USB devices). Firmware before it can't do signed OTA, and the page says so.
 3. Bluetooth (optional for a USB-only launch; it's hidden): fix and verify on **Android Chrome** (the main Bluetooth target) and desktop Chrome, including a dropped link mid-transfer (resume) and timing. Then set `BLE_UPDATES_ENABLED`.
 4. **Parked (owner decision); recovery over USB on Windows stays limited.** The page's recovery option (a device stuck as the `XIAO-SENSE` drive) uses the bootloader's UF2 drive, which 0.8.0-10 drops on Windows (`msc_uf2_check_stuck`). Recovery from macOS, Linux or ChromeOS is unaffected. The fix is bootloader 0.8.0-11 (draft fork PR #1, not flashed). If it is picked up: sacrificial device first, through `deploy-bootloader.sh`. In the same change: add `0.8.0-11` to `deploy_local.py --expect-bl` **and** the page's `ACCEPTED_BOOTLOADER_PREFIXES` (Python first), and update CLAUDE.md / `deploy_local.py` for its no-timeout behaviour.
