@@ -20,7 +20,9 @@ any integer choice differs or a continuous value is off by more than
 if there is no track, or a track traces no valid decision (the trace hook
 unwired, or a tracker that never decides): nothing compared is not a pass.
 
-    python tests/tracker/acf_equivalence.py --harness build/tracker_harness [--tracks ...]
+    python tests/tracker/acf_equivalence.py --harness build/tracker_harness [--tracks ...] [--jobs N]
+
+Tracks run concurrently, --jobs at a time (default: the CPU count); output in corpus order.
 """
 from __future__ import annotations
 
@@ -28,12 +30,50 @@ import argparse
 import subprocess
 import sys
 import tempfile
+from functools import partial
 from pathlib import Path
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from parallel import DEFAULT_JOBS, map_tracks  # noqa: E402
 from run_tracker_eval import CORPUS, DEVICE_LEVEL_DB, decode, find_ffmpeg  # noqa: E402
+
+INTS = ["valid", "period", "mult", "src"]
+
+
+def trace_track(stem: str, args: argparse.Namespace, ffmpeg: str) -> dict | None:
+    """One track's comparison, or None when it traced no valid decision."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpd = Path(tmp)
+        pcm = tmpd / f"{stem}.pcm"
+        decode(ffmpeg, CORPUS / f"{stem}.mp3", pcm, args.level_db)
+        trace = tmpd / f"{stem}.acf.csv"
+        subprocess.run([args.harness, str(pcm), str(tmpd / "out.csv"), str(args.fps), "0.25", "1",
+                        f"--acf-trace={trace}"], check=True)
+        # atleast_1d: a one-row trace would otherwise load as a 0-d record.
+        d = np.atleast_1d(np.genfromtxt(trace, delimiter=",", names=True))
+    if d.size == 0 or int(np.sum(d["new_valid"] == 1)) == 0:
+        return None
+    same = np.ones(len(d), dtype=bool)
+    for k in INTS:
+        same &= d[f"new_{k}"] == d[f"ref_{k}"]
+    both = same & (d["new_valid"] == 1)
+    ph = np.abs(d["new_phase"] - d["ref_phase"])[both]
+    diffs = [f"  {stem} frame {int(row['snap_frame'])}: new period {int(row['new_period'])} "
+             f"x{int(row['new_mult'])} src {int(row['new_src'])} (strength "
+             f"{row['new_strength']:.6f}) vs old {int(row['ref_period'])} x{int(row['ref_mult'])} "
+             f"src {int(row['ref_src'])} ({row['ref_strength']:.6f})" for row in d[~same]]
+    return {
+        "n": len(d),
+        "same": int(same.sum()),
+        "dpf": float(np.max(np.abs(d["new_period_f"] - d["ref_period_f"])[both], initial=0.0)),
+        "dph": float(np.max(np.minimum(ph, 1.0 - ph), initial=0.0)),
+        "dacc": float(np.max(np.abs(d["new_accent"] - d["ref_accent"])[both], initial=0.0)),
+        "dstr": float(np.max(np.abs(d["new_strength"] - d["ref_strength"]), initial=0.0)),
+        "lag": sorted({int(x) for x in d["apply_frame"] - d["snap_frame"]}),
+        "diffs": diffs,
+    }
 
 
 def main() -> int:
@@ -43,6 +83,7 @@ def main() -> int:
     ap.add_argument("--fps", type=float, default=60.0)
     ap.add_argument("--ffmpeg")
     ap.add_argument("--level-db", type=float, default=DEVICE_LEVEL_DB)
+    ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS, help="tracks traced at once (default: the CPU count)")
     ap.add_argument("--max-period-f", type=float, default=1e-3, help="max |periodF difference| (frames)")
     ap.add_argument("--max-phase", type=float, default=1e-4, help="max |phase target difference| (cycles)")
     args = ap.parse_args()
@@ -55,46 +96,20 @@ def main() -> int:
     lags: set[int] = set()
     empty: list[str] = []
     print(f"{'track':32s} {'decisions':>9s} {'identical':>9s} {'dPeriodF':>9s} {'dPhase':>9s} "
-          f"{'dAccent':>9s} {'dStrength':>9s} {'lag':>5s}")
-    with tempfile.TemporaryDirectory() as tmp:
-        tmpd = Path(tmp)
-        for stem in stems:
-            pcm = tmpd / f"{stem}.pcm"
-            decode(ffmpeg, CORPUS / f"{stem}.mp3", pcm, args.level_db)
-            trace = tmpd / f"{stem}.acf.csv"
-            subprocess.run([args.harness, str(pcm), str(tmpd / "out.csv"), str(args.fps), "0.25", "1",
-                            f"--acf-trace={trace}"], check=True)
-            # atleast_1d: a one-row trace would otherwise load as a 0-d record.
-            d = np.atleast_1d(np.genfromtxt(trace, delimiter=",", names=True))
-            if d.size == 0 or int(np.sum(d["new_valid"] == 1)) == 0:
-                empty.append(stem)
-                print(f"{stem:32s} no valid decision traced", flush=True)
-                continue
-            ints = ["valid", "period", "mult", "src"]
-            same = np.ones(len(d), dtype=bool)
-            for k in ints:
-                same &= d[f"new_{k}"] == d[f"ref_{k}"]
-            both = same & (d["new_valid"] == 1)
-            dpf = float(np.max(np.abs(d["new_period_f"] - d["ref_period_f"])[both], initial=0.0))
-            ph = np.abs(d["new_phase"] - d["ref_phase"])[both]
-            dph = float(np.max(np.minimum(ph, 1.0 - ph), initial=0.0))
-            dacc = float(np.max(np.abs(d["new_accent"] - d["ref_accent"])[both], initial=0.0))
-            dstr = float(np.max(np.abs(d["new_strength"] - d["ref_strength"]), initial=0.0))
-            lag = sorted({int(x) for x in d["apply_frame"] - d["snap_frame"]})
-            lags.update(lag)
-            print(f"{stem:32s} {len(d):9d} {same.mean():9.4f} {dpf:9.2e} {dph:9.2e} {dacc:9.2e} "
-                  f"{dstr:9.2e} {'/'.join(map(str, lag)):>5s}", flush=True)
-            for row in d[~same]:
-                diffs.append(f"  {stem} frame {int(row['snap_frame'])}: new period {int(row['new_period'])} "
-                             f"x{int(row['new_mult'])} src {int(row['new_src'])} (strength "
-                             f"{row['new_strength']:.6f}) vs old {int(row['ref_period'])} x{int(row['ref_mult'])} "
-                             f"src {int(row['ref_src'])} ({row['ref_strength']:.6f})")
-            tot["n"] += len(d)
-            tot["same"] += int(same.sum())
-            tot["dpf"] = max(tot["dpf"], dpf)
-            tot["dph"] = max(tot["dph"], dph)
-            tot["dacc"] = max(tot["dacc"], dacc)
-            tot["dstr"] = max(tot["dstr"], dstr)
+          f"{'dAccent':>9s} {'dStrength':>9s} {'lag':>5s}", flush=True)  # before the workers fork
+    for stem, r in zip(stems, map_tracks(partial(trace_track, args=args, ffmpeg=ffmpeg), stems, args.jobs)):
+        if r is None:
+            empty.append(stem)
+            print(f"{stem:32s} no valid decision traced", flush=True)
+            continue
+        lags.update(r["lag"])
+        print(f"{stem:32s} {r['n']:9d} {r['same'] / r['n']:9.4f} {r['dpf']:9.2e} {r['dph']:9.2e} "
+              f"{r['dacc']:9.2e} {r['dstr']:9.2e} {'/'.join(map(str, r['lag'])):>5s}", flush=True)
+        diffs.extend(r["diffs"])
+        tot["n"] += r["n"]
+        tot["same"] += r["same"]
+        for k in ("dpf", "dph", "dacc", "dstr"):
+            tot[k] = max(tot[k], r[k])
     print()
     print(f"ALL: {tot['n']} decisions, {tot['same']} identical ({tot['same'] / max(tot['n'], 1):.5f}); "
           f"max dPeriodF {tot['dpf']:.2e} frames, max dPhase {tot['dph']:.2e}, max dAccent {tot['dacc']:.2e}, "
