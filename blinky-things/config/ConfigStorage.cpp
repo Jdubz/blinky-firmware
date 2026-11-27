@@ -768,10 +768,12 @@ void ConfigStorage::refreshFileCopy() {
     // up to the journal's state, so a firmware that predates the journal,
     // flashed next, reads this session's saves too. The stall is harmless:
     // the loop is about to stop.
-    if (journal == nullptr || !journal->hasState()) return;
+    if (journal == nullptr) return;
     auto wm = static_cast<SemaphoreHandle_t>(writeMutex_);
     if (wm) xSemaphoreTake(wm, portMAX_DELAY);
-    if (journal != nullptr) {
+    // Re-read under the mutex: a failed write clears `journal` (writeNow,
+    // which holds this mutex).
+    if (journal != nullptr && journal->hasState()) {
         const uint32_t crc = SettingsJournal::crc32(0, journal->state(), journal->stateLen());
         if (!(journal->hasSync() && journal->syncValue() == crc) &&
             writeConfigFile(journal->state(), journal->stateLen()) &&
@@ -817,18 +819,22 @@ bool ConfigStorage::writeNow(const ConfigData& d) {
 }
 
 void ConfigStorage::printStorageStatus(Print& out) const {
-    if (journal == nullptr) {
+    // One read of the pointer: the writer task clears it after a failed
+    // write (writeNow), and this runs on the console's task, which can block
+    // in a print below while the writer runs. The object itself is never freed.
+    SettingsJournal* const j = journal;
+    if (j == nullptr) {
         out.println(F("storage: /config.bin (settings journal off: saves erase flash and stall the loop, #49)"));
         return;
     }
     out.print(F("storage: journal page "));
-    out.print(journal->currentPage());
+    out.print(j->currentPage());
     out.print(F(", "));
-    out.print(journal->freeBytes());
+    out.print(j->freeBytes());
     out.print(F(" B free, erases "));
     out.print(bootErases);
     out.print(F(" at boot / "));
-    out.print(journal->eraseCount() - bootErases);
+    out.print(j->eraseCount() - bootErases);
     out.print(F(" since, flash ops "));
     out.print(NrfJournalFlash::ops());
     out.print(F(" (retried "));
@@ -836,7 +842,7 @@ void ConfigStorage::printStorageStatus(Print& out) const {
     out.print(F("), loaded from "));
     out.print(bootSource);
     out.print(F(", config.bin copy "));
-    out.print(journal->hasSync() ? F("synced") : F("not synced"));
+    out.print(j->hasSync() ? F("synced") : F("not synced"));
     out.println(bootFileRewritten ? F(" (rewritten at boot)") : F(" (current at boot)"));
 }
 
@@ -1014,16 +1020,16 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     auto validateFloat = [&](float& value, float min, float max, const __FlashStringHelper* name) {
         if (value < min || value > max) {
             float clamped = value < min ? min : max;
-            Serial.print(F("[ERROR] Corrupt config "));
-            Serial.print(name);
-            Serial.print(F(": "));
-            Serial.print(value);
-            Serial.print(F(" out of ["));
-            Serial.print(min);
-            Serial.print(F(", "));
-            Serial.print(max);
-            Serial.print(F("], clamped to "));
-            Serial.println(clamped);
+            BLINKY_SERIAL.print(F("[ERROR] Corrupt config "));
+            BLINKY_SERIAL.print(name);
+            BLINKY_SERIAL.print(F(": "));
+            BLINKY_SERIAL.print(value);
+            BLINKY_SERIAL.print(F(" out of ["));
+            BLINKY_SERIAL.print(min);
+            BLINKY_SERIAL.print(F(", "));
+            BLINKY_SERIAL.print(max);
+            BLINKY_SERIAL.print(F("], clamped to "));
+            BLINKY_SERIAL.println(clamped);
             BlinkyAssert::failCount++;
             value = clamped;
             fixedCount++;
@@ -1038,16 +1044,16 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     #define VALIDATE_INT(value, lo, hi, name) do { \
         if ((value) < (lo) || (value) > (hi)) { \
             auto _clamped = (value) < (lo) ? (lo) : (hi); \
-            Serial.print(F("[ERROR] Corrupt config ")); \
-            Serial.print(name); \
-            Serial.print(F(": ")); \
-            Serial.print(value); \
-            Serial.print(F(" out of [")); \
-            Serial.print(lo); \
-            Serial.print(F(", ")); \
-            Serial.print(hi); \
-            Serial.print(F("], clamped to ")); \
-            Serial.println(_clamped); \
+            BLINKY_SERIAL.print(F("[ERROR] Corrupt config ")); \
+            BLINKY_SERIAL.print(name); \
+            BLINKY_SERIAL.print(F(": ")); \
+            BLINKY_SERIAL.print(value); \
+            BLINKY_SERIAL.print(F(" out of [")); \
+            BLINKY_SERIAL.print(lo); \
+            BLINKY_SERIAL.print(F(", ")); \
+            BLINKY_SERIAL.print(hi); \
+            BLINKY_SERIAL.print(F("], clamped to ")); \
+            BLINKY_SERIAL.println(_clamped); \
             BlinkyAssert::failCount++; \
             (value) = _clamped; \
             fixedCount++; \
@@ -1066,14 +1072,14 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     //  CBSS, Bayesian, octave, spectral, noise estimation params. See git history.)
 
     if (fixedCount > 0) {
-        Serial.print(F("[WARN] Fixed "));
-        Serial.print(fixedCount);
-        Serial.println(F(" bad config param(s) (other settings preserved)"));
+        BLINKY_SERIAL.print(F("[WARN] Fixed "));
+        BLINKY_SERIAL.print(fixedCount);
+        BLINKY_SERIAL.println(F(" bad config param(s) (other settings preserved)"));
     }
 
     // Debug: show loaded values
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
-        Serial.print(F("[DEBUG] baseSpawnChance=")); Serial.println(data_.fire.baseSpawnChance, 2);
+        BLINKY_SERIAL.print(F("[DEBUG] baseSpawnChance=")); BLINKY_SERIAL.println(data_.fire.baseSpawnChance, 2);
     }
 
     fireParams.baseSpawnChance = data_.fire.baseSpawnChance;

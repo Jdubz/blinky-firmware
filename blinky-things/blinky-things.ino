@@ -859,7 +859,11 @@ void loop() {
   if (audioController &&
       SerialConsole::isDebugChannelEnabled(DebugChannel::TRANSIENT)) {
     float onsetStrength = audioController->getLastOnsetStrength();
-    if (onsetStrength > 0.0f) {
+    if (onsetStrength > 0.0f && !SerialConsole::streamRoom()) {
+      // The host isn't reading: skip this data line whole and count it, as
+      // the stream does (#23), rather than wait for room and stall the loop.
+      SerialConsole::streamLineDropped();
+    } else if (onsetStrength > 0.0f) {
       // T1.4/T1.5: include gate_mask + spectral feature snapshot at firing
       // time so offline analysis can classify TPs vs FPs by gate state and
       // spectral signature without needing persist_raw signal_frame replay.
@@ -1010,16 +1014,18 @@ void loop() {
     lastBatteryCheck = millis();
     float voltage = battery->getVoltage();
     if (voltage > 0 && voltage < Platform::Battery::VOLTAGE_CRITICAL) {
+      // Through the output ring (#23): a direct Serial print could land
+      // inside a stream line already half in the USB FIFO.
       if (SerialConsole::getGlobalLogLevel() >= LogLevel::ERROR) {
-        Serial.print(F("[ERROR] CRITICAL BATTERY: "));
-        Serial.print(voltage);
-        Serial.println(F("V"));
+        BLINKY_SERIAL.print(F("[ERROR] CRITICAL BATTERY: "));
+        BLINKY_SERIAL.print(voltage);
+        BLINKY_SERIAL.println(F("V"));
       }
     } else if (voltage > 0 && voltage < Platform::Battery::VOLTAGE_LOW) {
       if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
-        Serial.print(F("[WARN] Low battery: "));
-        Serial.print(voltage);
-        Serial.println(F("V"));
+        BLINKY_SERIAL.print(F("[WARN] Low battery: "));
+        BLINKY_SERIAL.print(voltage);
+        BLINKY_SERIAL.println(F("V"));
       }
     }
   }
