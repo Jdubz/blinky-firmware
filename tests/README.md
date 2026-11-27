@@ -61,7 +61,7 @@ Before pushing:
 These files predate the runtime device config and the current flashing rules:
 
 - `test_runner.ino`, `BlinkyTest.h/.cpp`, `unit/`, `integration/` - an on-device test sketch
-- `validate_configs.py` - checks the old compiled-in `blinky-things/devices/*.h` configs. Devices now use the JSON configs in blinky_time's [`devices/registry/`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry).
+- `validate_configs.py` - checks the old compiled-in `blinky-things/devices/*.h` configs. Devices now use private JSON configs uploaded at runtime (format: blinky_time's [`devices/registry/README.md`](https://github.com/Jdubz/blinky_time/blob/master/devices/registry/README.md)).
 
 To test on hardware, flash a test device (`devices/test_devices.json`) with `python tools/deploy_local.py --port <port> --device-id <id> --dev` and use the on-device tests in [TESTING.md](../TESTING.md).
 

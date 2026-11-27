@@ -3,7 +3,7 @@
 How the blinky bootloader is developed, built, released, tested and recovered.
 Owner decisions (2026-11-21):
 - The bootloader is **our fork**, maintained separately. Fix bugs there; don't file upstream or wait on Adafruit.
-- The test box has **one** XIAO nRF52840 Sense Plus (87DE9B58C90AFE2D), seated in a XIAO Debug Mate. The Debug Mate is for debugging and recovery only.
+- The test box has **one** XIAO nRF52840 Sense Plus, seated in a XIAO Debug Mate. The Debug Mate is for debugging and recovery only.
 - Every normal process works over **USB alone, and preferably also BLE**.
 - **Everything is hands-off.** No step needs a person, and every validation runs on that one chip.
 
