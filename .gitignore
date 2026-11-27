@@ -51,6 +51,7 @@ scratch/
 # Pinned, isolated firmware toolchain (scripts/setup_toolchain.sh, #252)
 # The pinned toolchain: a directory here, or a link to a shared one.
 .arduino
+.arduino-esp32s3
 
 # Local scratch: host-test build output and deep-research notes
 /build/

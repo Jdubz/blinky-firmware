@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Install the pinned firmware toolchain into <repo>/.arduino (#252).
 #
-#   bash scripts/setup_toolchain.sh
+#   bash scripts/setup_toolchain.sh                    # nRF52840 (the fleet) -> .arduino
+#   bash scripts/setup_toolchain.sh --target esp32s3   # XIAO ESP32-S3 (next gen) -> .arduino-esp32s3
 #
 # Every machine that builds firmware (workstations, the fleet server, CI, the
 # release workflow) runs this, so every build resolves exactly the same core
@@ -9,10 +10,23 @@
 # tools/setup_tflite_lib.sh, the core patches in patches/. scripts/build.sh
 # and the Makefile build only inside this environment.
 #
+# The ESP32-S3 toolchain (tools/firmware_toolchain_esp32s3.json) is the same
+# kind of pin in its own directory: core and libraries only (no TFLite, no
+# core patches; both are nRF52840-specific today).
+#
 # Idempotent. Fails loudly if anything is missing, extra, or unpatched.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
+case "${1:-}" in
+    "") export BLINKY_TARGET=nrf52840 ;;
+    --target)
+        [[ -n "${2:-}" ]] || { echo "ERROR: --target needs nrf52840 or esp32s3" >&2; exit 1; }
+        export BLINKY_TARGET="$2" ;;
+    *) echo "ERROR: unknown argument '$1' (usage: setup_toolchain.sh [--target nrf52840|esp32s3])" >&2; exit 1 ;;
+esac
 source scripts/arduino_env.sh
+NRF=false
+[[ "$BLINKY_TARGET" == nrf52840 ]] && NRF=true
 
 if ! command -v arduino-cli >/dev/null 2>&1; then
     echo "ERROR: arduino-cli not found on PATH" >&2
@@ -37,12 +51,15 @@ while IFS= read -r lib; do
 done < "$BLINKY_ARDUINO_DIR/.libs"
 rm -f "$BLINKY_ARDUINO_DIR/.libs"
 
-bash tools/setup_tflite_lib.sh --ci
-bash scripts/apply_core_patches.sh
+if $NRF; then
+    bash tools/setup_tflite_lib.sh --ci
+    bash scripts/apply_core_patches.sh
+fi
 
-# Verify: exactly the pinned libraries (plus TFLite), nothing else.
-"$BLINKY_PYTHON" - "$(_blinky_native "$BLINKY_TOOLCHAIN_JSON")" <<'EOF'
+# Verify: exactly the pinned libraries (plus TFLite on the nRF52840), nothing else.
+"$BLINKY_PYTHON" - "$(_blinky_native "$BLINKY_TOOLCHAIN_JSON")" "$NRF" <<'EOF'
 import json, subprocess, sys
+tflite = sys.argv[2] == "true"
 want = {}
 for spec in json.load(open(sys.argv[1]))["libraries"]:
     name, ver = spec.rsplit("@", 1)
@@ -60,14 +77,16 @@ bad = []
 for name, ver in want.items():
     if have.get(name) != ver:
         bad.append(f"{name}: want {ver}, have {have.get(name)}")
-extra = sorted(set(have) - set(want) - {"Arduino_TensorFlowLite"})
+extra = sorted(set(have) - set(want) - ({"Arduino_TensorFlowLite"} if tflite else set()))
 if extra:
     bad.append(f"unexpected libraries: {extra}")
-if "Arduino_TensorFlowLite" not in have:
+if tflite and "Arduino_TensorFlowLite" not in have:
     bad.append("Arduino_TensorFlowLite missing")
 if bad:
     sys.exit("ERROR: toolchain library set wrong:\n  " + "\n  ".join(bad))
 print("  libraries:", ", ".join(f"{k}@{v}" for k, v in sorted(have.items())))
 EOF
-bash scripts/apply_core_patches.sh --check
+if $NRF; then
+    bash scripts/apply_core_patches.sh --check
+fi
 echo "=== Toolchain ready ($BLINKY_CORE) ==="

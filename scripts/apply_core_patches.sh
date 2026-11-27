@@ -17,7 +17,7 @@
 # targets are normalized to LF first (<file>.orig keeps the original).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-source scripts/arduino_env.sh
+BLINKY_TARGET=nrf52840 source scripts/arduino_env.sh   # the nRF52840 core's patches
 
 CHECK_ONLY=false
 [[ "${1:-}" == "--check" ]] && CHECK_ONLY=true

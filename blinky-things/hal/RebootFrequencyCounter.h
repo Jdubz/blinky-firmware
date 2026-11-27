@@ -422,6 +422,180 @@ namespace RebootFrequencyCounter {
 
 }  // namespace RebootFrequencyCounter
 
+#elif defined(ESP32)
+
+// XIAO ESP32-S3 (next gen, #50): the same detector on NVS (namespace "blinkyboot"),
+// which keeps it across power cycles like the nRF52840's LittleFS file. Fault resets
+// are esp_reset_reason()'s panic and watchdog reasons; power-on, brownout, the reset
+// pin, esp_restart() (`reboot`) and deep-sleep wakes don't count. At the threshold the
+// hook quarantines the device config and the boot goes on into safe mode: the ROM's
+// USB download mode is always reachable, so there is no recovery bootloader to enter.
+// A failed NVS access logs a [FALLBACK] and leaves detection degraded for that boot.
+
+#include <Arduino.h>
+#include <Preferences.h>
+#include <esp_system.h>
+#include "SafeBootWatchdog.h"
+
+namespace RebootFrequencyCounter {
+
+    static constexpr uint8_t REBOOT_THRESHOLD = 5;
+    static constexpr uint32_t STABLE_UPTIME_MS = 5UL * 60UL * 1000UL;
+    static constexpr const char* NVS_NAMESPACE = "blinkyboot";
+    static constexpr const char* NVS_KEY = "freq";
+
+    static volatile bool stableMarked_ = false;
+    static bool clearStarted_ = false;
+    static uint8_t bootCount_ = 0;
+    static uint8_t flashCounter_ = 0;
+    static uint32_t lastResetReason_ = 0;   // this boot's reason as nRF52840 RESETREAS bits
+
+    // esp_reset_reason() in the nRF52840's RESETREAS bits, so `json info` resetReason
+    // reads the same on both platforms (blinky-server and the deploy tools read it):
+    // 0x1 reset pin, 0x2 watchdog, 0x4 soft reset, 0x8 CPU fault (lockup on the
+    // nRF52840; a panic here); 0 power-on. Brownout and the rest map to 0 as on the
+    // nRF52840, where they leave RESETREAS clear.
+    inline uint32_t resetreasBits(esp_reset_reason_t r) {
+        switch (r) {
+            case ESP_RST_EXT:      return 0x1;
+            case ESP_RST_INT_WDT:
+            case ESP_RST_TASK_WDT:
+            case ESP_RST_WDT:      return 0x2;
+            case ESP_RST_SW:       return 0x4;
+            case ESP_RST_PANIC:    return 0x8;
+            default:               return 0;
+        }
+    }
+
+    inline bool isFaultReset(esp_reset_reason_t r) {
+        switch (r) {
+            case ESP_RST_PANIC:
+            case ESP_RST_INT_WDT:
+            case ESP_RST_TASK_WDT:
+            case ESP_RST_WDT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    inline bool readCounter(uint8_t& out) {
+        Preferences p;
+        if (!p.begin(NVS_NAMESPACE, /*readOnly=*/false)) {
+            Serial.println(F("[FALLBACK] RebootFrequencyCounter: NVS open failed"));
+            return false;
+        }
+        out = p.getUChar(NVS_KEY, 0);
+        p.end();
+        return true;
+    }
+
+    inline bool writeCounter(uint8_t value) {
+        Preferences p;
+        if (!p.begin(NVS_NAMESPACE, /*readOnly=*/false)) {
+            Serial.println(F("[FALLBACK] RebootFrequencyCounter: NVS open failed"));
+            return false;
+        }
+        const bool ok = p.putUChar(NVS_KEY, value) == sizeof(uint8_t);
+        p.end();
+        if (!ok) Serial.println(F("[FALLBACK] RebootFrequencyCounter: NVS write failed"));
+        return ok;
+    }
+
+    using OnThresholdHook = void (*)();
+    inline OnThresholdHook& onThresholdHook() {
+        static OnThresholdHook h = nullptr;
+        return h;
+    }
+    inline void setOnThresholdHook(OnThresholdHook h) { onThresholdHook() = h; }
+
+    inline void checkAndIncrement() {
+        const esp_reset_reason_t reason = esp_reset_reason();
+        lastResetReason_ = resetreasBits(reason);
+        if (!readCounter(bootCount_)) {
+            Serial.println(F("[FALLBACK] RebootFrequencyCounter: crash-loop detection degraded this boot"));
+            bootCount_ = 0;
+            flashCounter_ = 1;  // unknown: let tickStable() try to clear it
+            return;
+        }
+        flashCounter_ = bootCount_;
+        if (!isFaultReset(reason)) {
+            Serial.print(F("[BOOT] RebootFrequencyCounter: non-fault reset (esp_reset_reason="));
+            Serial.print(static_cast<int>(reason));
+            Serial.print(F(") — counter held at "));
+            Serial.print(bootCount_);
+            Serial.print(F("/"));
+            Serial.println(REBOOT_THRESHOLD);
+            return;
+        }
+        Serial.print(F("[BOOT] RebootFrequencyCounter: fault reset (esp_reset_reason="));
+        Serial.print(static_cast<int>(reason));
+        Serial.println(F(")"));
+        const uint16_t next = static_cast<uint16_t>(bootCount_) + 1;
+        if (next >= REBOOT_THRESHOLD) {
+            Serial.print(F("[BOOT] RebootFrequencyCounter threshold reached ("));
+            Serial.print(next);
+            Serial.print(F("/"));
+            Serial.print(REBOOT_THRESHOLD);
+            Serial.println(F(") — quarantining the device config (safe mode)"));
+            if (writeCounter(0)) flashCounter_ = 0;
+            if (onThresholdHook()) onThresholdHook()();
+            return;
+        }
+        flashCounter_ = static_cast<uint8_t>(next);
+        if (!writeCounter(static_cast<uint8_t>(next))) {
+            Serial.println(F("[FALLBACK] RebootFrequencyCounter: counter persist "
+                             "failed — crash-loop detection degraded this boot"));
+        }
+        Serial.print(F("[BOOT] RebootFrequencyCounter: "));
+        Serial.print(next);
+        Serial.print(F("/"));
+        Serial.println(REBOOT_THRESHOLD);
+    }
+
+    inline void logCleared() {
+        Serial.print(F("[BOOT] RebootFrequencyCounter cleared ("));
+        Serial.print(STABLE_UPTIME_MS / 60000UL);
+        Serial.println(F("min stable uptime)"));
+    }
+
+    static constexpr uint32_t CLEAR_RETRY_MS = 60UL * 1000UL;
+
+    // The clear writes flash, so it runs on a task below the loop (idle priority), never
+    // the loop itself; it retries once a minute until it lands.
+    inline void clearTaskMain(void*) {
+        while (!writeCounter(0)) vTaskDelay(pdMS_TO_TICKS(CLEAR_RETRY_MS));
+        flashCounter_ = 0;
+        stableMarked_ = true;
+        logCleared();
+        vTaskDelete(nullptr);
+    }
+
+    inline void tickStable(uint32_t nowMs) {
+        if (stableMarked_ || clearStarted_) return;
+        if (nowMs < STABLE_UPTIME_MS) return;
+        clearStarted_ = true;
+        if (flashCounter_ == 0) {
+            stableMarked_ = true;
+            logCleared();
+            return;
+        }
+        if (xTaskCreate(clearTaskMain, "rfcc", 4096, nullptr, tskIDLE_PRIORITY, nullptr) != pdPASS) {
+            Serial.println(F("[FALLBACK] RebootFrequencyCounter: clear task not started, clearing on the loop"));
+            if (writeCounter(0)) {
+                flashCounter_ = 0;
+                stableMarked_ = true;
+                logCleared();
+            }
+        }
+    }
+
+    inline uint8_t getPriorBootCount() { return bootCount_; }
+    // This boot's reset reason in RESETREAS bits (resetreasBits()).
+    inline uint32_t getLastResetReason() { return lastResetReason_; }
+
+}  // namespace RebootFrequencyCounter
+
 #else
 
 // Stub for non-nRF52 platforms
@@ -431,4 +605,4 @@ namespace RebootFrequencyCounter {
     inline uint8_t getBootCount() { return 0; }
 }
 
-#endif  // ARDUINO_ARCH_NRF52
+#endif  // ARDUINO_ARCH_NRF52 / ESP32

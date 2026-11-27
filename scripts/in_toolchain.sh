@@ -13,7 +13,7 @@
 set -euo pipefail
 CLI="$1"; shift
 [[ "${1:-}" == "compile" ]] || { echo "in_toolchain.sh: only '<cli> compile ...' is supported" >&2; exit 2; }
-source "$(git rev-parse --show-toplevel)/scripts/arduino_env.sh"
+BLINKY_TARGET=nrf52840 source "$(git rev-parse --show-toplevel)/scripts/arduino_env.sh"
 blinky_require_toolchain "$CLI"
 bash "$BLINKY_ROOT/scripts/apply_core_patches.sh" --check >/dev/null
 
