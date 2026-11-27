@@ -96,7 +96,7 @@ Device configs are JSON, uploaded to the device at runtime with `device upload <
 - **A bench device on your USB:** `device upload <json>` over its serial port is fine.
 - After an upload, wait at least 75 s of uptime before any reset (the 60-second rule in CLAUDE.md).
 
-Config files live in blinky_time's `devices/registry/`, one per device ID (`<deviceId>.json`). See its [README](https://github.com/Jdubz/blinky_time/blob/master/devices/registry/README.md) and [HARDWARE.md](HARDWARE.md).
+Config files are private, one per device ID (`<deviceId>.json`), never committed. The format is blinky_time's [devices/registry/README.md](https://github.com/Jdubz/blinky_time/blob/master/devices/registry/README.md); see also [HARDWARE.md](HARDWARE.md).
 
 ---
 

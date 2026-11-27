@@ -14,7 +14,7 @@
 
 Test devices are listed in `devices/test_devices.json`: `porkpie_hat` (the bench hat) and `testbox_grid` (the test box's Sense Plus with its 8x8 grid, `docs/HARDWARE.md`). Being a test device is a deliberate property of the device, not where it happens to be plugged in. Candidates and dev builds are refused for every other device.
 
-Device ids carry no version since 2026-11-27 (blinky_time's `devices/registry/README.md`): the bench hat was `hat_v1` and is now `porkpie_hat`. Until its config is uploaded again it still reports `hat_v1`, and `deploy_local.py` and `release_gate.py` refuse it either way (the id doesn't match, or isn't a test device). Before its next gate or dev build, upload `devices/registry/porkpie_hat.json` to it over USB (`device upload`, as that README says) and wait 75 s before any reset. The test box's chip takes `testbox_grid` by itself.
+Device ids carry no version since 2026-11-27 (blinky_time's `devices/registry/README.md`): the bench hat was `hat_v1` and is now `porkpie_hat`. Until its config is uploaded again it still reports `hat_v1`, and `deploy_local.py` and `release_gate.py` refuse it either way (the id doesn't match, or isn't a test device). Before its next gate or dev build, upload its entry, `porkpie_hat.json`, to it over USB (`device upload`, as that README says) and wait 75 s before any reset. The test box's chip takes `testbox_grid` by itself.
 
 ## Staging (blinky_time#349)
 
