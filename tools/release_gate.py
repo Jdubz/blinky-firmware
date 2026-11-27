@@ -14,7 +14,7 @@ Checks (each one must pass):
                quality bar)
   frametime    every 5 s loop-metrics window's longest frame (json info
                maxFrameMs) <= --max-frame-ms (default 50; the test box measures
-               15-27 ms with saves and streaming since #49 and #23, and hat_v1
+               15-27 ms with saves and streaming since #49 and #23, and porkpie_hat
                with music peaked at 24-31 ms before them). A long frame
                freezes the visuals: settings saves, blocking output, stalls
                (#258, #275)
@@ -34,8 +34,8 @@ Checks (each one must pass):
                --operator-confirmed "<note>" when a human already confirmed)
 
 Usage:
-  python tools/release_gate.py b214 --port COM3 --device-id hat_v1
-  python tools/release_gate.py b214 --port COM3 --device-id hat_v1 --skip-flash  # already on it
+  python tools/release_gate.py b214 --port COM3 --device-id porkpie_hat
+  python tools/release_gate.py b214 --port COM3 --device-id porkpie_hat --skip-flash  # already on it
 """
 
 import argparse

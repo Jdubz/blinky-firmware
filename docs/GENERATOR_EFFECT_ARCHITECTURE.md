@@ -88,7 +88,7 @@ A flash edge is stamped with the `millis()` at which the frame carrying it began
 
 ### LED brightness override (test box)
 
-`leds` overrides the LED strip's brightness at runtime, for the test box: its chip's device config (`testbox_grid_v1`) has brightness 0, so it boots and idles dark, and blinky-server lights it only while a test runs (blinky_time `docs/TEST_BOX.md`). The device config's `brightness` stays the default, applied at boot as before; nothing changes until a `leds` command arrives, and blinky-server sends it only to the box's chips (a `--staging` server). Runtime only: never saved, and `leds config` or a reboot returns to the device config's brightness. Code: `render/LedBrightness.h`.
+`leds` overrides the LED strip's brightness at runtime, for the test box: its chip's device config (`testbox_grid`) has brightness 0, so it boots and idles dark, and blinky-server lights it only while a test runs (blinky_time `docs/TEST_BOX.md`). The device config's `brightness` stays the default, applied at boot as before; nothing changes until a `leds` command arrives, and blinky-server sends it only to the box's chips (a `--staging` server). Runtime only: never saved, and `leds config` or a reboot returns to the device config's brightness. Code: `render/LedBrightness.h`.
 
 | Command | Does |
 |---|---|

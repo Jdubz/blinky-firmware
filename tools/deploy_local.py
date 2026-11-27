@@ -38,9 +38,9 @@ Pipeline (fails loud at every step, exit codes match deploy.sh):
  ~/.local/share/blinky/local_flash_attempts.jsonl.
 
 Usage:
-  python tools/deploy_local.py --port COM3 --device-id hat_v1
-  python tools/deploy_local.py --port COM3 --device-id hat_v1 --dry-run
-  python tools/deploy_local.py --port COM3 --device-id hat_v1 --skip-compile
+  python tools/deploy_local.py --port COM3 --device-id porkpie_hat
+  python tools/deploy_local.py --port COM3 --device-id porkpie_hat --dry-run
+  python tools/deploy_local.py --port COM3 --device-id porkpie_hat --skip-compile
 
 Exit codes: 1 compile, 2 upload/flash, 4 post-deploy assertion, 6 bad args or
 pre-flight refusal.
@@ -520,7 +520,7 @@ def main():
             pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", required=True, help="app-mode CDC port, e.g. COM3")
-    ap.add_argument("--device-id", required=True, help="expected device.id (e.g. hat_v1); must match")
+    ap.add_argument("--device-id", required=True, help="expected device.id (e.g. porkpie_hat); must match")
     ap.add_argument("--expect-bl", default="0.8.0-10", help="required bootloader version prefix")
     ap.add_argument("--release", metavar="bN",
                     help="flash this release instead of the latest stable (a candidate needs a test device)")
