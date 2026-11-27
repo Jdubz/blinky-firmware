@@ -72,6 +72,8 @@ esp_err_t wsDel(rmt_encoder_t* enc) {
 
 // Ticks at 10 MHz (0.1 us).
 constexpr uint16_t T0H = 4, T0L = 8, T1H = 8, T1L = 4;
+static_assert(T0H + T0L == 12, "a 0 bit is 1.2 us at 10 MHz");
+static_assert(T1H + T1L == 12, "a 1 bit is 1.2 us at 10 MHz");
 
 esp_err_t newWsEncoder(uint32_t resolutionHz, uint32_t resetUs, rmt_encoder_handle_t* out) {
     WsEncoder* e = new (std::nothrow) WsEncoder();
@@ -94,7 +96,6 @@ esp_err_t newWsEncoder(uint32_t resolutionHz, uint32_t resetUs, rmt_encoder_hand
     }
     // The latch: low for resetUs, as two halves (a symbol half holds at most 32767 ticks).
     const uint32_t half = resolutionHz / 1000000UL * resetUs / 2;
-    static_assert(T1H + T1L == 12 && T0H + T0L == 12, "1.2 us bit period at 10 MHz");
     e->latch.level0 = 0;
     e->latch.duration0 = half;
     e->latch.level1 = 0;
