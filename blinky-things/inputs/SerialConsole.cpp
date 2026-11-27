@@ -657,6 +657,11 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         out_.print(LoopMetrics::getLastWindowMs());
         out_.print(F(",\"frameWindowMs\":"));
         out_.print(LoopMetrics::getLastWindowLenMs());
+        // Loop time spent handing frames to the LEDs (#14): mean per show() and max, same window.
+        out_.print(F(",\"showUs\":"));
+        out_.print(LoopMetrics::getShowUs());
+        out_.print(F(",\"showMaxUs\":"));
+        out_.print(LoopMetrics::getShowMaxUs());
 
 #ifdef BLINKY_PLATFORM_NRF52840
         // Stack / heap headroom (#186, #187). Stack values are the minimum

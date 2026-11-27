@@ -40,6 +40,12 @@ struct State {
     uint32_t lastWindowMs = 0;  // monotonic timestamp of the last closed window
     uint32_t lastWindowLenMs = 0;  // how long the last closed window ran (>= WINDOW_MS)
     uint32_t prevTickMs   = 0;
+    // LED hand-off cost (#14): loop time inside leds->show(), this window and the last closed one
+    uint32_t showSumUs    = 0;
+    uint32_t showCount    = 0;
+    uint32_t showMaxUs    = 0;
+    uint32_t lastShowUs   = 0;  // mean per show() call
+    uint32_t lastShowMaxUs = 0;
 };
 
 inline State& state() {
@@ -101,6 +107,9 @@ inline void tick(uint32_t now) {
             s.minFrameMs  = UINT32_MAX;
             s.maxFrameMs  = 0;
             s.prevTickMs  = 0;
+            s.showSumUs   = 0;
+            s.showCount   = 0;
+            s.showMaxUs   = 0;
             return;
         }
         s.lastFps      = s.frameCount * 1000.0f / elapsed;
@@ -113,11 +122,26 @@ inline void tick(uint32_t now) {
         s.lastMaxMs    = s.maxFrameMs;
         s.lastWindowMs = now;
         s.lastWindowLenMs = elapsed;
+        s.lastShowUs   = s.showCount ? s.showSumUs / s.showCount : 0;  // 0 = no show() (safe mode)
+        s.lastShowMaxUs = s.showMaxUs;
         s.windowStart  = now;
         s.frameCount   = 0;
         s.minFrameMs   = UINT32_MAX;
         s.maxFrameMs   = 0;
+        s.showSumUs    = 0;
+        s.showCount    = 0;
+        s.showMaxUs    = 0;
     }
+}
+
+/// Loop task: time one leds->show() took, in micros(). On the nRF52840 core micros() is the
+/// FreeRTOS tick (1024 Hz, ~977 us steps) unless the DWT is enabled, so the mean is a dithered
+/// estimate and the max is quantized to ~1 ms, like the acf timers.
+inline void noteShowUs(uint32_t us) {
+    State& s = state();
+    s.showSumUs += us;
+    s.showCount++;
+    if (us > s.showMaxUs) s.showMaxUs = us;
 }
 
 inline float    getFps()           { return state().lastFps; }
@@ -131,5 +155,8 @@ inline uint32_t getMaxFrameMs()    { return state().lastMaxMs; }
 inline uint32_t getLastWindowMs()  { return state().lastWindowMs; }
 // Length of the last closed window in ms (0 until one has closed).
 inline uint32_t getLastWindowLenMs() { return state().lastWindowLenMs; }
+// Loop time inside leds->show() over the last closed window: mean per call and max, in us.
+inline uint32_t getShowUs()        { return state().lastShowUs; }
+inline uint32_t getShowMaxUs()     { return state().lastShowMaxUs; }
 
 }  // namespace LoopMetrics

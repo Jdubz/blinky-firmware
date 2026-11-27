@@ -139,7 +139,9 @@ void renderFrame() {
       const AudioControl& audio = audioController->getControl();
       pipeline->render(audio);
     }
+    const uint32_t showStartUs = micros();
     leds->show();
+    LoopMetrics::noteShowUs(micros() - showStartUs);
     // The frame is now queued to the LEDs (non-blocking DMA; they latch ~30 us/LED later):
     // stamp any test-pattern flash edge it carries.
     pipeline->testPattern().shown(millis());
