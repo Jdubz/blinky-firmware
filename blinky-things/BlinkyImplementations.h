@@ -85,8 +85,6 @@
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   #include "comms/BleAdvertiser.cpp"
   #include "comms/Esp32BleNus.cpp"
-  #include "comms/WifiManager.cpp"
-  #include "comms/WifiCommandServer.cpp"
 #endif
 
 // Test implementations (only when testing enabled)

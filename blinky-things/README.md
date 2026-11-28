@@ -17,7 +17,7 @@ blinky-things/
 ├── audio/                         # AudioTracker (tempo, PLP phase, onsets),
 │                                  #   SharedSpectralAnalysis, FrameOnsetNN + model data
 ├── comms/                         # BLE: NUS serial, fleet scanner, phone record stream
-│                                  #   (Esp32*/Wifi* files are unused ESP32-S3 leftovers)
+│                                  #   (Esp32BleNus, BleAdvertiser: the ESP32-S3; no Wi-Fi)
 ├── config/                        # ConfigStorage (flash), SettingsRegistry, DeviceConfigLoader
 ├── devices/                       # DeviceConfig struct + TestChipConfig (fallback for
 │                                  #   unconfigured chips); other *Config.h are legacy
