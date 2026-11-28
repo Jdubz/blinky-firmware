@@ -238,6 +238,9 @@ public:
     void setEsp32BleNus(Esp32BleNus* nus);
     void setWifiManager(WifiManager* wifi) { wifiManager_ = wifi; }
     void setTcpServer(WifiCommandServer* tcp) { tcpServer_ = tcp; }
+    // This boot's reset reason in nRF52840 RESETREAS bits (RebootFrequencyCounter maps
+    // esp_reset_reason()), so json info "resetReason" reads the same on both platforms.
+    void setResetReason(uint32_t resetReason) { resetReason_ = resetReason; }
 #endif
     SettingsRegistry& getSettings() { return settings_; }
 
@@ -356,6 +359,7 @@ private:
     BleAdvertiser* bleAdvertiser_ = nullptr;
     WifiManager* wifiManager_ = nullptr;
     WifiCommandServer* tcpServer_ = nullptr;
+    uint32_t resetReason_ = 0;
 #endif
     ConfigStorage* configStorage_;
     QspiOtaStaging* qspiOta_ = nullptr;

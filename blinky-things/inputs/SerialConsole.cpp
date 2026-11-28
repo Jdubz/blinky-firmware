@@ -27,9 +27,8 @@
 #include "../comms/Esp32BleNus.h"
 #include "../comms/WifiManager.h"
 #include "../comms/WifiCommandServer.h"
-#ifdef BLINKY_PLATFORM_ESP32S3
-#include <HTTPUpdate.h>
-#endif
+#include "../hal/MemTelemetry.h"
+#include "../hal/hardware/Esp32RmtLedStrip.h"  // ledTxStackFree (#14)
 #endif
 
 extern DeviceConfig config;  // v28: Changed to non-const for runtime loading
@@ -721,6 +720,42 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
 #endif
         // Hardware reset reason of this boot (nRF52 RESETREAS bits: 0x1 pin,
         // 0x2 watchdog, 0x4 soft reset, 0x8 CPU lockup; 0 = power-on).
+        out_.print(F(",\"resetReason\":"));
+        out_.print(resetReason_);
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+        // The same fields as the nRF52840 above, so blinky-server reads both alike
+        // (recStackFree: record mode is nRF52840-only).
+        {
+            TaskHandle_t loopTask = MemTelemetry::loopTaskSlot();
+            if (loopTask) {
+                out_.print(F(",\"loopStackFree\":"));
+                out_.print(MemTelemetry::stackFreeBytes(loopTask));
+            } else {
+                out_.print(F(",\"loopStackFree\":null"));
+            }
+            out_.print(F(",\"cmdStackFree\":"));
+            out_.print(MemTelemetry::stackFreeBytes(nullptr));
+            out_.print(F(",\"ledTxStackFree\":"));
+            out_.print(Esp32RmtLedStrip::txStackFreeBytes());
+            MemTelemetry::HeapInfo h = MemTelemetry::heap();
+            if (h.valid) {
+                out_.print(F(",\"heapTotal\":"));
+                out_.print(h.total);
+                out_.print(F(",\"heapUsed\":"));
+                out_.print(h.used);
+                out_.print(F(",\"heapPeak\":"));
+                out_.print(h.peak);
+            } else {
+                out_.print(F(",\"heapTotal\":null,\"heapUsed\":null,\"heapPeak\":null"));
+            }
+            // ESP-IDF's allocator refuses allocations from interrupt context outright
+            // (it asserts), so none can be attempted and survive to be counted.
+            out_.print(F(",\"mallocIsr\":0"));
+        }
+#if BLINKY_SERIAL_OUT
+        out_.print(F(",\"streamDropped\":"));
+        out_.print(SerialOut::instance().streamLinesDropped());
+#endif
         out_.print(F(",\"resetReason\":"));
         out_.print(resetReason_);
 #endif
@@ -2692,42 +2727,15 @@ bool SerialConsole::handleWifiCommand(const char* cmd) {
         return true;
     }
 
-    if (strncmp(arg, "ota ", 4) == 0) {
-        const char* url = arg + 4;
-        while (*url == ' ') url++;
-        if (*url == '\0') {
-            out_.println(F("Usage: wifi ota <http://host:port/firmware.bin>"));
-            return true;
-        }
-        if (WiFi.status() != WL_CONNECTED) {
-            out_.println(F("[OTA] WiFi not connected"));
-            return true;
-        }
-        // WARNING: HTTP pull OTA has no TLS — firmware is fetched in plaintext.
-        // Only use on a trusted LAN. An attacker on the same network could MITM
-        // the connection and push arbitrary firmware.
-        out_.println(F("[OTA] WARNING: HTTP (no TLS) — trusted LAN only"));
-        out_.print(F("[OTA] Pulling firmware from "));
-        out_.println(url);
-        WiFiClient client;
-        httpUpdate.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-        t_httpUpdate_return ret = httpUpdate.update(client, url);
-        switch (ret) {
-            case HTTP_UPDATE_FAILED:
-                out_.print(F("[OTA] Failed: "));
-                out_.println(httpUpdate.getLastErrorString());
-                break;
-            case HTTP_UPDATE_NO_UPDATES:
-                out_.println(F("[OTA] No update available"));
-                break;
-            case HTTP_UPDATE_OK:
-                out_.println(F("[OTA] Success, rebooting..."));
-                break;
-        }
+    if (strncmp(arg, "ota", 3) == 0 && (arg[3] == '\0' || arg[3] == ' ')) {
+        // The unsigned HTTP pull OTA is gone: only signed, released firmware reaches a
+        // device (docs/RELEASE_PROCESS.md). ESP32-S3 OTA (signed, dual app slots with
+        // rollback) is a later phase of #50; until then it is flashed over USB.
+        out_.println(F("{\"error\":\"wifi ota removed: unsigned firmware is refused (signed ESP32-S3 OTA is not built yet)\"}"));
         return true;
     }
 
-    out_.println(F("Usage: wifi [ssid <name>|pass <key>|connect|disconnect|clear|scan|ota <url>|status]"));
+    out_.println(F("Usage: wifi [ssid <name>|pass <key>|connect|disconnect|clear|scan|status]"));
     return true;
 #else
     // WiFi not available on nRF52840

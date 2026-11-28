@@ -3,11 +3,27 @@
 #if BLINKY_SERIAL_OUT
 
 #include <string.h>
+
+#if defined(NRF52840_XXAA)
 #include <class/cdc/cdc_device.h>
 
 // The host has the port open (DTR). Not `Serial`: its operator bool yields
 // when false.
 static inline bool hostAttached() { return tud_cdc_connected(); }
+static inline bool inIsr() { return __get_IPSR() != 0; }
+// Below the loop (TASK_PRIO_LOW); stack in words.
+#define SOUT_TASK_PRIO TASK_PRIO_LOWEST
+#define SOUT_TASK_STACK 384
+#elif defined(ARDUINO_ARCH_ESP32)
+// The host is reading the USB Serial/JTAG port (SOF seen and data taken).
+static inline bool hostAttached() { return HWCDC::isConnected(); }
+static inline bool inIsr() { return xPortInIsrContext(); }
+// Below the loop task (priority 1 on arduino-esp32); stack in bytes.
+#define SOUT_TASK_PRIO tskIDLE_PRIORITY
+#define SOUT_TASK_STACK 3072
+#else
+#error "SerialOut: BLINKY_SERIAL_OUT set for an unhandled platform"
+#endif
 
 SerialOut& SerialOut::instance() {
     static SerialOut out;  // constructed on first use (no static-init order issue)
@@ -28,7 +44,7 @@ void SerialOut::begin() {
     // Below the loop (TASK_PRIO_LOW): it runs only while the loop waits
     // (vTaskDelay each iteration), and the loop preempts it the moment it
     // wakes. It blocks on task notifications, so it costs nothing idle.
-    if (xTaskCreate(drainMain, "sout", 384, this, TASK_PRIO_LOWEST, &h) != pdPASS) {
+    if (xTaskCreate(drainMain, "sout", SOUT_TASK_STACK, this, SOUT_TASK_PRIO, &h) != pdPASS) {
         Serial.println(F("[FALLBACK] SerialOut: drain task not started; USB serial writes stay blocking (#23)"));
         return;
     }
@@ -38,7 +54,7 @@ void SerialOut::begin() {
 size_t SerialOut::write(const uint8_t* data, size_t size) {
     // Before begin(), from an ISR, or with the scheduler stopped: no mutex
     // to take, so straight to Serial as before.
-    if (drainTask_ == nullptr || __get_IPSR() != 0 ||
+    if (drainTask_ == nullptr || inIsr() ||
         xTaskGetSchedulerState() != taskSCHEDULER_RUNNING) {
         return Serial.write(data, size);
     }
@@ -119,8 +135,8 @@ void SerialOut::drain() {
         } else {
             const int avail = Serial.availableForWrite();
             if (avail <= 0) {
-                // FIFO full: tud_cdc_tx_complete_cb wakes us; the timeout
-                // is only a backstop.
+                // FIFO full: tud_cdc_tx_complete_cb wakes us (nRF52840); the
+                // timeout is only a backstop (and the ESP32-S3's wake-up).
                 ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(2));
                 continue;
             }
@@ -136,6 +152,7 @@ void SerialOut::drain() {
     }
 }
 
+#if defined(NRF52840_XXAA)
 // TinyUSB: "Invoked when space becomes available in TX buffer" (cdc_device.h,
 // TU_ATTR_WEAK; the core doesn't define it). Runs on the usbd task.
 extern "C" {
@@ -144,4 +161,5 @@ void tud_cdc_tx_complete_cb(uint8_t itf) {
     SerialOut::instance().onTxComplete();
 }
 }
+#endif
 #endif  // BLINKY_SERIAL_OUT

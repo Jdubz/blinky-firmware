@@ -273,6 +273,11 @@ def preflight(args):
     if dev.get("id") != args.device_id:
         raise DeployError(f"device.id is {dev.get('id')!r}, expected {args.device_id!r} - refusing "
                           f"(explicit target required)", 6)
+    # This tool installs nRF52840 images only (hex/UF2); an ESP32-S3 is flashed with esptool
+    # through blinky-server. Firmware from before `platform` existed is nRF52840.
+    if info.get("platform", "nrf52840") != "nrf52840":
+        raise DeployError(f"device reports platform {info.get('platform')!r}: deploy_local.py flashes "
+                          f"nRF52840 images only", 6)
     if (info.get("sn") or "").upper() != usb_serial:
         raise DeployError(f"json sn {info.get('sn')} != USB serial {usb_serial}", 6)
     if not dev.get("configured") and not args.allow_unconfigured:
