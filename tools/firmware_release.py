@@ -10,7 +10,10 @@ blinky_time's scripts/deploy.sh run blinky_time's own copy
 manifest are the contract between them.
 
 A release is a GitHub Release tagged `b<N>` whose assets are:
-  blinky-things-b<N>.hex, blinky-things-b<N>.uf2, manifest.json, and, once
+  blinky-things-b<N>.hex, blinky-things-b<N>.uf2 (nRF52840), manifest.json,
+  blinky-things-b<N>-esp32s3.bin and blinky-things-b<N>-esp32s3.app.bin
+  (XIAO ESP32-S3, blinky-firmware#50: the full flash image written at 0x0, and
+  the app alone for its first OTA slot at 0x10000; see ESP32-S3 below), and, once
   signed, blinky-things-b<N>.bin + blinky-things-b<N>.otam: the raw
   application image and its Ed25519-signed OTA manifest (tools/ota_manifest.py)
   that the web updater sends to the device. Signing happens ONLY after a
@@ -25,8 +28,23 @@ plus, once bench-gated, gate-<device_id>.json. Channels:
              staging-build.yml builds from every green staging push (version
              b<N>-dev-<sha8>), for test devices only (download_staging)
 
+ESP32-S3 (manifest "platforms" lists "esp32s3", and its "esp32s3" block gives
+names, offsets and layout; both files are in "files" with their sha256):
+  blinky-things-b<N>-esp32s3.bin      arduino-cli's merged image, 8 MB, flashed at
+                                      0x0: bootloader (0x0), partition table (0x8000),
+                                      otadata (0xe000, blank: boot ota_0), app (0x10000).
+                                      It covers the NVS partition (0x9000, 20 kB:
+                                      settings and device config) with 0xFF; a flash
+                                      that must keep them skips that range.
+  blinky-things-b<N>-esp32s3.app.bin  the app image alone (ota_0 at 0x10000; OTA later)
+Only an ESP32-S3 takes these and only an nRF52840 takes the hex/UF2: the
+tools here (deploy_local.py, release_gate.py, the web flasher mirror) read the
+nRF52840 names only, and blinky-server tells the boards apart by `json info`
+"platform" and checks the image bytes.
+
 CLI:
-  firmware_release.py package --hex H --build N --sha SHA --out DIR
+  firmware_release.py package --hex H --build N --sha SHA --out DIR [--esp32s3-dir D]
+  firmware_release.py check-esp32s3 --dir D --version V   (the S3 image checks alone)
   firmware_release.py download [--tag bN] [--out DIR]   (default: latest stable)
   firmware_release.py latest-stable
   firmware_release.py mirror --out DIR [--keep N]   (stable releases for the web flasher)
@@ -141,6 +159,103 @@ def require_test_device(device_id, what):
                            "Only listed test devices take non-stable firmware.")
 
 
+# ---------------------------------------------------------------- ESP32-S3 ---
+
+ESP32S3 = "esp32s3"
+ESP_IMAGE_MAGIC = 0xE9
+ESP_CHIP_ID_ESP32S3 = 9          # esp_image_header_t.chip_id (ESP-IDF esp_app_format.h)
+ESP32S3_FLASH_SIZE = 8 * 1024 * 1024
+ESP32S3_PARTITION_TABLE = 0x8000
+PARTITION_MAGIC = b"\xAA\x50"
+PARTITION_MD5_MAGIC = b"\xEB\xEB"
+# The default_8MB table (tools/firmware_toolchain_esp32s3.json): (type, subtype) -> (offset, size).
+ESP32S3_LAYOUT = {
+    "nvs": ((0x01, 0x02), 0x9000, 0x5000),
+    "otadata": ((0x01, 0x00), 0xE000, 0x2000),
+    "app0": ((0x00, 0x10), 0x10000, 0x330000),
+    "app1": ((0x00, 0x11), 0x340000, 0x330000),
+}
+ESP32S3_APP_OFFSET = ESP32S3_LAYOUT["app0"][1]
+ESP32S3_APP_SLOT = ESP32S3_LAYOUT["app0"][2]
+# arduino-cli's output names (scripts/build.sh --esp32 -> /tmp/blinky-build-esp32s3).
+ESP32S3_BUILD_MERGED = "blinky-things.ino.merged.bin"
+ESP32S3_BUILD_APP = "blinky-things.ino.bin"
+
+
+def esp32s3_names(build):
+    """(full flash image, app image) release asset names for build N."""
+    return f"blinky-things-b{build}-esp32s3.bin", f"blinky-things-b{build}-esp32s3.app.bin"
+
+
+def _esp_image_chip(data, what):
+    if len(data) < 24 or data[0] != ESP_IMAGE_MAGIC:
+        raise ReleaseError(f"{what}: no ESP image header (magic 0x{data[:1].hex() or '--'}, want 0xe9)")
+    chip = int.from_bytes(data[12:14], "little")
+    if chip != ESP_CHIP_ID_ESP32S3:
+        raise ReleaseError(f"{what}: image is for chip id {chip}, not the ESP32-S3 ({ESP_CHIP_ID_ESP32S3})")
+
+
+def esp32s3_partitions(merged):
+    """The partition table at 0x8000 of a full flash image: [(label, type, subtype, offset, size)]."""
+    table = merged[ESP32S3_PARTITION_TABLE:ESP32S3_PARTITION_TABLE + 0xC00]
+    out = []
+    for i in range(0, len(table), 32):
+        e = table[i:i + 32]
+        if e[:2] == PARTITION_MAGIC:
+            label = e[12:28].split(b"\0", 1)[0].decode("ascii", "replace")
+            out.append((label, e[2], e[3], int.from_bytes(e[4:8], "little"), int.from_bytes(e[8:12], "little")))
+        elif e[:2] in (PARTITION_MD5_MAGIC, b"\xFF\xFF"):
+            break
+        else:
+            raise ReleaseError(f"partition table: bad entry magic {e[:2].hex()} at 0x{ESP32S3_PARTITION_TABLE + i:x}")
+    if not out:
+        raise ReleaseError("full flash image has no partition table at 0x8000")
+    return out
+
+
+def validate_esp32s3(merged, app, version):
+    """Refuse an ESP32-S3 image pair that isn't what the manifest will say it is.
+
+    merged: the full flash image (written at 0x0); app: the app image alone. Checks the
+    bootloader and app headers are ESP32-S3 images, the partition table is the pinned
+    default_8MB layout (NVS where blinky-server keeps it, both OTA slots), the app fits its
+    slot and sits at 0x10000 in the full image, and the app carries `version` (the string
+    `json info` reports), so the manifest can't describe some other build.
+    """
+    if len(merged) != ESP32S3_FLASH_SIZE:
+        raise ReleaseError(f"full flash image is {len(merged)} bytes, want {ESP32S3_FLASH_SIZE} (8 MB)")
+    _esp_image_chip(merged, "bootloader at 0x0")
+    _esp_image_chip(app, "app image")
+    parts = {(t, st): (label, off, size) for label, t, st, off, size in esp32s3_partitions(merged)}
+    for name, (key, off, size) in ESP32S3_LAYOUT.items():
+        got = parts.get(key)
+        if got is None or got[1:] != (off, size):
+            raise ReleaseError(f"partition table: {name} is {got}, want offset 0x{off:x} size 0x{size:x} "
+                               "(the pinned default_8MB layout)")
+    if len(app) > ESP32S3_APP_SLOT:
+        raise ReleaseError(f"app image is {len(app)} bytes, larger than its 0x{ESP32S3_APP_SLOT:x} slot")
+    if merged[ESP32S3_APP_OFFSET:ESP32S3_APP_OFFSET + len(app)] != app:
+        raise ReleaseError("the full flash image does not hold the app image at 0x10000")
+    if version.encode("ascii") not in app:
+        raise ReleaseError(f"app image does not carry version {version!r}")
+
+
+def package_esp32s3(build_dir, build, version, out_dir):
+    """Validate an ESP32-S3 build and copy its two images into out_dir. Returns their paths."""
+    build_dir = Path(build_dir)
+    merged_src = build_dir / ESP32S3_BUILD_MERGED
+    app_src = build_dir / ESP32S3_BUILD_APP
+    for p in (merged_src, app_src):
+        if not p.exists():
+            raise ReleaseError(f"ESP32-S3 build output missing: {p}")
+    validate_esp32s3(merged_src.read_bytes(), app_src.read_bytes(), version)
+    merged_name, app_name = esp32s3_names(build)
+    merged_out, app_out = Path(out_dir) / merged_name, Path(out_dir) / app_name
+    shutil.copyfile(merged_src, merged_out)
+    shutil.copyfile(app_src, app_out)
+    return merged_out, app_out
+
+
 # ---------------------------------------------------------------- package ---
 
 def release_pubkey_from_firmware():
@@ -152,7 +267,8 @@ def release_pubkey_from_firmware():
     return m.group(1)
 
 
-def package(hex_path, build, sha, out_dir, toolchain, libraries=None, dev=False):
+def package(hex_path, build, sha, out_dir, toolchain, libraries=None, dev=False,
+            esp32s3_dir=None, esp32s3_toolchain=None, esp32s3_libraries=None):
     """Validate a compiled hex and write release assets + manifest into out_dir.
 
     ``dev``: a ``scripts/build.sh --dev`` hex (the staging build, CI on every push to
@@ -161,6 +277,9 @@ def package(hex_path, build, sha, out_dir, toolchain, libraries=None, dev=False)
     Same validators the deploy paths run (tools/uf2_upload.py), but strict:
     the hex safety check must actually run (uf2_upload.validate_hex skips it
     with a warning when pre_upload_check can't be imported).
+
+    ``esp32s3_dir``: an ESP32-S3 build's output (scripts/build.sh --esp32), packaged
+    next to the nRF52840 files (validate_esp32s3()), with its toolchain and libraries.
 
     A candidate is NOT signed for OTA here: see sign_release().
     """
@@ -182,17 +301,42 @@ def package(hex_path, build, sha, out_dir, toolchain, libraries=None, dev=False)
         shutil.copyfile(hex_path, hex_out)
         shutil.copyfile(uf2_tmp, uf2_out)
 
+    version = f"b{build}-dev-{sha[:8]}" if dev else f"b{build}-{sha[:8]}"
+    files = [hex_out, uf2_out]
+    platforms = ["nrf52840"]
+    esp = None
+    if esp32s3_dir is not None:
+        merged_out, app_out = package_esp32s3(esp32s3_dir, build, version, out_dir)
+        files += [merged_out, app_out]
+        platforms.append(ESP32S3)
+        nvs = ESP32S3_LAYOUT["nvs"]
+        esp = {
+            "image": merged_out.name,          # full flash image, written at image_offset
+            "image_offset": 0,
+            "app": app_out.name,               # the app alone, for ota_0 at app_offset
+            "app_offset": ESP32S3_APP_OFFSET,
+            "chip": ESP32S3,
+            "flash_size": ESP32S3_FLASH_SIZE,
+            "partitions": "default_8MB",
+            "nvs": {"offset": nvs[1], "size": nvs[2]},  # settings + device config live here
+            "toolchain": esp32s3_toolchain,
+            "libraries": esp32s3_libraries,
+        }
+
     manifest = {
         "build": int(build),
-        "version": f"b{build}-dev-{sha[:8]}" if dev else f"b{build}-{sha[:8]}",
+        "version": version,
         "channel": "dev" if dev else "release",
         "git_sha": sha,
-        "files": {p.name: sha256(p) for p in (hex_out, uf2_out)},
+        "files": {p.name: sha256(p) for p in files},
+        "platforms": platforms,
         "toolchain": toolchain,
         # Libraries the compile actually resolved (tools/check_build_libs.py, #252).
         "libraries": libraries,
         **storage_versions(),
     }
+    if esp is not None:
+        manifest[ESP32S3] = esp
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
 
@@ -532,6 +676,11 @@ def main():
                    help="libraries.json written by scripts/build.sh (resolved library set)")
     p.add_argument("--dev", action="store_true",
                    help="a scripts/build.sh --dev hex: version b<N>-dev-<sha8> (staging, test devices only)")
+    p.add_argument("--esp32s3-dir", help="ESP32-S3 build output (scripts/build.sh --esp32) to package too")
+    p.add_argument("--esp32s3-toolchain-json", default="{}", help="the ESP32-S3 toolchain versions as JSON")
+    ce = sub.add_parser("check-esp32s3")
+    ce.add_argument("--dir", required=True, help="ESP32-S3 build output (scripts/build.sh --esp32)")
+    ce.add_argument("--version", required=True, help="the version the image must carry (json info)")
     d = sub.add_parser("download")
     d.add_argument("--tag", help="b<N> (default: latest stable)")
     d.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "blinky-release"))
@@ -554,9 +703,21 @@ def main():
     try:
         if args.cmd == "package":
             libs = json.loads(Path(args.libraries_json).read_text(encoding="utf-8"))
+            esp_libs = None
+            if args.esp32s3_dir:
+                esp_libs = json.loads((Path(args.esp32s3_dir) / "libraries.json").read_text(encoding="utf-8"))
             m = package(args.hex, args.build, args.sha, args.out, json.loads(args.toolchain_json), libs,
-                        dev=args.dev)
+                        dev=args.dev, esp32s3_dir=args.esp32s3_dir,
+                        esp32s3_toolchain=json.loads(args.esp32s3_toolchain_json), esp32s3_libraries=esp_libs)
             print(json.dumps(m, indent=2))
+        elif args.cmd == "check-esp32s3":
+            d = Path(args.dir)
+            for name in (ESP32S3_BUILD_MERGED, ESP32S3_BUILD_APP):
+                if not (d / name).exists():
+                    raise ReleaseError(f"ESP32-S3 build output missing: {d / name}")
+            validate_esp32s3((d / ESP32S3_BUILD_MERGED).read_bytes(), (d / ESP32S3_BUILD_APP).read_bytes(),
+                             args.version)
+            print(f"OK: ESP32-S3 images in {d} (version {args.version})")
         elif args.cmd == "download":
             r = download(args.tag or latest_stable_tag(), args.out)
             print(json.dumps({"tag": r["tag"], "stable": r["stable"], "hex": str(r["hex"]),

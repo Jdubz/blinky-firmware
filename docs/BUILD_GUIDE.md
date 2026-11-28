@@ -6,9 +6,9 @@
 |-------|------|------|--------|
 | XIAO nRF52840 Sense | `Seeeduino:nrf52:xiaonRF52840Sense` | Seeeduino nRF52 (non-mbed), pinned | The deployed fleet |
 | XIAO nRF52840 Sense Plus | same build as the Sense (`xiaonRF52840Sense`) | same | New devices and the test box chip. Every build must run on both boards ([BOOTLOADER_WORKFLOW.md](BOOTLOADER_WORKFLOW.md) §5a) |
-| XIAO ESP32-S3 Sense | `esp32:esp32:XIAO_ESP32S3` | arduino-esp32 (not pinned) | Next generation only, see [NEXTGEN_ESP32S3_PLAN.md](NEXTGEN_ESP32S3_PLAN.md) |
+| XIAO ESP32-S3 Sense | `esp32:esp32:XIAO_ESP32S3` with OPI PSRAM, Hardware CDC and the `default_8MB` partitions (full string in `tools/firmware_toolchain_esp32s3.json`) | arduino-esp32 `3.3.12`, pinned | Next generation only, see [NEXTGEN_ESP32S3_PLAN.md](NEXTGEN_ESP32S3_PLAN.md). CI compiles it, and every staging build and candidate carries its image |
 
-> ESP32-S3 support for the current fleet was cut in March 2026. All active development targets the nRF52840.
+> The deployed fleet is nRF52840 only. The ESP32-S3 build came back in Nov 2026 (#50, phase A): it runs single-core (renderer and audio in the normal loop, as on the nRF52840). The dual-core split is a later phase.
 
 **CRITICAL**: Never use `arduino-cli upload` or `adafruit-nrfutil dfu serial` on the nRF52840. They can brick the device. How to put firmware on a device is in [Flashing](#flashing) below and in blinky_time's [SAFETY.md](https://github.com/Jdubz/blinky_time/blob/master/docs/SAFETY.md).
 
@@ -31,7 +31,18 @@ This installs everything into `<repo>/.arduino/` (gitignored):
 - exactly the libraries pinned there (Adafruit NeoPixel, arduinoFFT, ArduinoJson), plus TFLite at the commit in `tools/setup_tflite_lib.sh`;
 - the core patches from `scripts/apply_core_patches.sh` (TinyUSB CDC fix, `patches/`).
 
-`build.sh` and the Makefile build **only** inside `.arduino/`. Libraries in your own Arduino folders are never read. `tools/check_build_libs.py` fails the build if a library resolves elsewhere or a version drifts. **Never fix a build by installing libraries yourself.** Fix the pin and re-run `setup_toolchain.sh`. Details: [RELEASE_PROCESS.md](RELEASE_PROCESS.md#the-pinned-toolchain-every-machine).
+### The ESP32-S3 toolchain (next gen)
+```bash
+bash scripts/setup_toolchain.sh --target esp32s3   # or: make setup-toolchain-esp32s3
+./scripts/build.sh --esp32 --no-bump                # or: make esp32-compile
+```
+It is the same kind of pin, in its own file and directory: `tools/firmware_toolchain_esp32s3.json` → `<repo>/.arduino-esp32s3/` (gitignored). That means the core `esp32:esp32@3.3.12` and exactly Adafruit NeoPixel, arduinoFFT, ArduinoJson and NimBLE-Arduino `2.5.2`. There is no TFLite: the onset NN is off on devices, and whether the S3 runs one is the later P3 investigation. `check_build_libs.py --target esp32s3` refuses a library from anywhere else, a version drift, or a pin the compile didn't use. The output lands in `/tmp/blinky-build-esp32s3/`:
+- `blinky-things.ino.merged.bin` is the full flash image, 8 MB, written at `0x0`: bootloader `0x0`, partition table `0x8000`, otadata `0xe000`, app `0x10000`.
+- `blinky-things.ino.bin` is the app alone.
+
+The partition table (`default_8MB`) is chosen so that OTA with rollback won't need a repartition: NVS `0x9000` (20 kB: settings and the device config), otadata `0xe000`, two 3.2 MB app slots (`0x10000`, `0x340000`), SPIFFS `0x670000`, coredump `0x7f0000`.
+
+`build.sh` and the Makefile build **only** inside `.arduino/` (the ESP32-S3: `.arduino-esp32s3/`). Libraries in your own Arduino folders are never read. `tools/check_build_libs.py` fails the build if a library resolves elsewhere or a version drifts. **Never fix a build by installing libraries yourself.** Fix the pin and re-run `setup_toolchain.sh`. Details: [RELEASE_PROCESS.md](RELEASE_PROCESS.md#the-pinned-toolchain-every-machine).
 
 **Important**: The core is `Seeeduino:nrf52` (non-mbed). The mbed core (`Seeeduino:mbed`) has header conflicts with Adafruit NeoPixel.
 
@@ -68,6 +79,7 @@ This installs everything into `<repo>/.arduino/` (gitignored):
 | A device on this machine's USB | `python tools/deploy_local.py --port COMx --device-id <id>` (stable by default; `--dev` / candidates only on a test device in `devices/test_devices.json`) |
 | A personal device, from a browser | `blinky-time.joshwentworth.com/#firmware`, see [WEB_FLASHER.md](WEB_FLASHER.md) |
 | A bricked bare chip, not yet in the fleet | `make uf2-upload UPLOAD_PORT=/dev/ttyACM0` |
+| An ESP32-S3 (test box) | blinky-server's flash path (esptool over USB Serial/JTAG), with the release's or staging build's `blinky-things-b<N>-esp32s3.bin`. The full image covers NVS with `0xFF`, so a flash that keeps the settings and device config skips `0x9000`–`0xDFFF`. Nothing in this repo flashes an S3: `deploy_local.py`, `uf2_upload.py` and `make esp32-uf2-*` refuse it |
 | Bootloader | `./scripts/deploy-bootloader.sh`, on a sacrificial device first (see [bootloader/README.md](../bootloader/README.md)) |
 
 Use `deploy_local.py --dry-run` first. Do not use `build.sh --upload` or a manual UF2 drag-and-drop on a configured device: they skip the identity, version and stability checks.
@@ -90,7 +102,7 @@ Double-tapping Reset shows the drive. Only do that by hand on a bare bench chip.
 
 ## Device Configurations
 
-Device configs are JSON, uploaded to the device at runtime with `device upload <json>`. They are not compile-time flags; every nRF52840 device runs the same binary.
+Device configs are JSON, uploaded to the device at runtime with `device upload <json>`. They are not compile-time flags; every nRF52840 device runs the same binary. The ESP32-S3 takes the same JSON and keeps it in NVS. Its `ledPin` / `ledPin2` are GPIO numbers: D0 is GPIO1.
 
 - **Fleet devices:** the config goes through the deploy.sh-gated fleet API (`device upload` needs the `X-Deploy-Tool` header). Never by direct `curl`.
 - **A bench device on your USB:** `device upload <json>` over its serial port is fine.
@@ -116,10 +128,14 @@ Platform-specific code is isolated in HAL implementations (`blinky-things/hal/ha
 
 | Interface | nRF52840 | ESP32-S3 (next gen) |
 |-----------|----------|----------|
-| PDM mic | `Nrf52PdmMic` (hardware PDM interrupt) | `Esp32PdmMic` (I2S) |
-| Flash storage | `InternalFileSystem` | `Preferences` (NVS) |
+| PDM mic | `Nrf52PdmMic` (hardware PDM interrupt) | `Esp32PdmMic` (I2S PDM-RX, CLK GPIO42 / DATA GPIO41 on the Sense board) |
+| LED output | `Nrf52PwmLedStrip` (PWM + EasyDMA, show() never waits) | `Esp32RmtLedStrip` (RMT, DMA on one channel, show() never waits) |
+| Settings and device config | settings journal + LittleFS `/config.bin` | `Preferences` (NVS, namespace `blinky`) |
+| Watchdog / crash-loop detector | WDT + GPREGRET2, LittleFS `/.boot_freq` | task watchdog + RTC no-init counter, NVS `blinkyboot` (recovery: ROM download mode) |
+| USB serial output | `SerialOut` ring + drain task (TinyUSB CDC) | the same ring + drain task (HWCDC, USB Serial/JTAG) |
+| BLE | Bluefruit (NUS, DFU, scanner) | NimBLE-Arduino (NUS, fleet advertiser) |
 
-`./scripts/build.sh --esp32` and the Makefile `esp32-*` targets still exist for next-gen work. They are not under the pinned toolchain yet.
+`./scripts/build.sh --esp32` and `make esp32-compile` build it inside its pinned toolchain.
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for more.
 
@@ -127,7 +143,7 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for more.
 
 ## Build Output
 
-A b215 release image is about 485 KB (`blinky-things-b215.bin`: 484,764 bytes). The application slot leaves room for the bootloader and settings; `arduino-cli` prints the exact use and limit at the end of every build.
+A b215 release image is about 485 KB (`blinky-things-b215.bin`: 484,764 bytes). The ESP32-S3 app is about 1.3 MB of its 3.2 MB slot. The application slot leaves room for the bootloader and settings; `arduino-cli` prints the exact use and limit at the end of every build.
 
 ---
 

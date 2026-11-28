@@ -2,7 +2,7 @@
 
 This file contains **critical behavior rules only** for the firmware (nRF52840, `blinky-things/`) and its approval and release flow. Architecture and history live in `docs/`. The tooling (blinky-server, blinky-console, ml-training, the test box) lives in [blinky_time](https://github.com/Jdubz/blinky_time), with its own `CLAUDE.md`. The validation corpus and its scorers live in [blinky-corpus](https://github.com/Jdubz/blinky-corpus), the `corpus/` submodule here.
 
-> ESP32-S3 support was cut March 2026. All active development targets **nRF52840** (the deployed fleet). The **next generation** of fixtures will be built on the XIAO ESP32-S3 Sense, dual-core (renderer on one core, audio listener on the other): see `docs/NEXTGEN_ESP32S3_PLAN.md`. Don't change deployed-fleet code for it.
+> The deployed fleet is **nRF52840** only. The **next generation** of fixtures will be built on the XIAO ESP32-S3 Sense, dual-core (renderer on one core, audio listener on the other): see `docs/NEXTGEN_ESP32S3_PLAN.md`. Its build is back (#50 phase A, single-core): it has its own pinned toolchain, a CI compile, and an image in every candidate. Don't change deployed-fleet code for it: S3 code goes in platform-guarded HAL implementations, and shared edits must leave the nRF52840 image byte-identical.
 
 ## Repositories and what crosses between them (blinky_time#357)
 
@@ -177,6 +177,7 @@ When you discover a silent fallback, the fix is to (a) assert / panic at the fai
 ./scripts/build.sh --no-bump                # recompile without incrementing
 ./scripts/build.sh --dev                    # dev build: no bump, version b<N>-dev-<sha>
 ./scripts/build.sh --build N                # exact build number (release CI)
+./scripts/build.sh --esp32 --no-bump        # XIAO ESP32-S3 (next gen): its own pinned toolchain, setup_toolchain.sh --target esp32s3
 ```
 
 Devices get firmware through blinky_time's `./scripts/deploy.sh` (fleet, stable only) or `tools/deploy_local.py` (a device on this machine's USB).

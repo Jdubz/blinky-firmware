@@ -128,7 +128,8 @@ jobs:
   # The XIAO ESP32-S3 build (next gen, #50; docs/NEXTGEN_ESP32S3_PLAN.md) under its own
   # pinned toolchain (tools/firmware_toolchain_esp32s3.json, .arduino-esp32s3), so the S3
   # branches can't rot again. Only when a firmware path changed (job `changes`); runs if
-  # that job failed, so a broken diff can't skip it.
+  # that job failed, so a broken diff can't skip it. The image checks are the release's
+  # (firmware_release.py check-esp32s3).
   compile-esp32s3:
     name: Compile Firmware (ESP32-S3)
     runs-on: ubuntu-latest
@@ -157,6 +158,10 @@ jobs:
     - name: Compile sketch (scripts/build.sh --esp32, as releases do)
       run: bash scripts/build.sh --esp32 --build 0
 
+    - name: Image checks (the release validator)
+      run: |
+        v=$(sed -n 's/^#define FIRMWARE_VERSION "\(.*\)"$/\1/p' blinky-things/types/Version.h)
+        python tools/firmware_release.py check-esp32s3 --dir /tmp/blinky-build-esp32s3 --version "$v"
 
   cppcheck:
     name: Static Analysis (cppcheck)
@@ -319,7 +324,8 @@ jobs:
     - name: Release gate beat-pace arithmetic
       run: |
         pip install pytest pyserial
-        python -m pytest -v tests/tools/test_release_gate.py tests/tools/test_staging_download.py tests/tools/test_uf2_upload_ports.py
+        python -m pytest -v tests/tools/test_release_gate.py tests/tools/test_staging_download.py tests/tools/test_uf2_upload_ports.py \
+          tests/tools/test_firmware_release_esp32s3.py
 
   static-init-safety:
     name: Static Init Safety Check
