@@ -61,8 +61,8 @@
   #include "comms/RecordStream.h"
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   #include "comms/BleAdvertiser.h"
-  #include "comms/WifiManager.h"
-  #include "comms/WifiCommandServer.h"
+  // No Wi-Fi: the unauthenticated TCP command server was removed until a real,
+  // authenticated design lands (docs/NEXTGEN_ESP32S3_PLAN.md).
 #endif
 
 // Testing (for development/debugging)

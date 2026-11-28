@@ -18,8 +18,6 @@ class BleNus;
 class RecordStream;
 class BleAdvertiser;
 class Esp32BleNus;
-class WifiManager;
-class WifiCommandServer;
 class Fire;
 class Water;
 class PlasmaGlobe;
@@ -236,8 +234,6 @@ public:
 #elif defined(BLINKY_PLATFORM_ESP32S3)
     void setBleAdvertiser(BleAdvertiser* adv) { bleAdvertiser_ = adv; }
     void setEsp32BleNus(Esp32BleNus* nus);
-    void setWifiManager(WifiManager* wifi) { wifiManager_ = wifi; }
-    void setTcpServer(WifiCommandServer* tcp) { tcpServer_ = tcp; }
     // This boot's reset reason in nRF52840 RESETREAS bits (RebootFrequencyCounter maps
     // esp_reset_reason()), so json info "resetReason" reads the same on both platforms.
     void setResetReason(uint32_t resetReason) { resetReason_ = resetReason; }
@@ -324,7 +320,7 @@ private:
     bool handleFakeAudioCommand(const char* cmd); // Synthetic audio for visual debug
     bool handleBleCommand(const char* cmd);       // BLE diagnostics (all platforms)
     bool handleRecordCommand(const char* cmd);    // Phone record mode (nRF52840)
-    bool handleWifiCommand(const char* cmd);      // WiFi config (ESP32-S3 only)
+    bool handleWifiCommand(const char* cmd);      // Refuses: no Wi-Fi on any platform yet
     // (handleEnsembleCommand removed v67 — BandFlux pipeline removed; show nn moved to handleBeatTrackingCommand)
     bool handleBeatTrackingCommand(const char* cmd);  // CBSS beat tracking commands
     bool handleOtaCommand(const char* cmd);              // QSPI staged OTA commands
@@ -357,8 +353,6 @@ private:
     RecordStream* recordStream_ = nullptr;
 #elif defined(BLINKY_PLATFORM_ESP32S3)
     BleAdvertiser* bleAdvertiser_ = nullptr;
-    WifiManager* wifiManager_ = nullptr;
-    WifiCommandServer* tcpServer_ = nullptr;
     uint32_t resetReason_ = 0;
 #endif
     ConfigStorage* configStorage_;

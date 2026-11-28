@@ -25,8 +25,6 @@
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "../comms/BleAdvertiser.h"
 #include "../comms/Esp32BleNus.h"
-#include "../comms/WifiManager.h"
-#include "../comms/WifiCommandServer.h"
 #include "../hal/MemTelemetry.h"
 #include "../hal/hardware/Esp32RmtLedStrip.h"  // ledTxStackFree (#14)
 #endif
@@ -400,7 +398,7 @@ void SerialConsole::update() {
 }
 
 void SerialConsole::handleCommand(const char* cmd, Print& output) {
-    // Temporarily redirect output to the specified Print target (e.g., TCP client).
+    // Temporarily redirect output to the specified Print target (another transport).
     // Saves and restores the TeeStream's secondary to avoid permanent state change.
     Print* savedSecondary = out_.secondary();
     out_.setSecondary(&output);
@@ -462,7 +460,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleDebugCommand(cmd)) return true;     // Debug channel commands
     if (handleFakeAudioCommand(cmd)) return true; // Fake audio for visual debug
     if (handleBleCommand(cmd)) return true;       // BLE diagnostics
-    if (handleWifiCommand(cmd)) return true;      // WiFi config (ESP32-S3)
+    if (handleWifiCommand(cmd)) return true;      // Refuses: Wi-Fi is off
     if (handleOtaCommand(cmd)) return true;       // QSPI staged OTA
     return false;
 }
@@ -2626,7 +2624,11 @@ bool SerialConsole::handleBleCommand(const char* cmd) {
     return true;
 }
 
-// === WIFI COMMANDS (ESP32-S3 only) ===
+// === WIFI COMMANDS (none: Wi-Fi is off) ===
+// The ESP32-S3's Wi-Fi TCP command server took the full console, unauthenticated, from
+// anyone on the network, so it is gone from the build along with the credential
+// commands that started it. The radio stays off on both platforms (BLE only on the
+// S3). A real, authenticated network design comes later (docs/NEXTGEN_ESP32S3_PLAN.md).
 bool SerialConsole::handleWifiCommand(const char* cmd) {
     if (strncmp(cmd, "wifi", 4) != 0) return false;
 
@@ -2634,108 +2636,8 @@ bool SerialConsole::handleWifiCommand(const char* cmd) {
     while (*arg == ' ') arg++;
 
 #ifdef BLINKY_PLATFORM_ESP32S3
-    if (*arg == '\0') {
-        // "wifi" — show status
-        if (tcpServer_) {
-            tcpServer_->printDiagnostics(out_);
-        } else if (wifiManager_) {
-            wifiManager_->printStatus();
-        } else {
-            out_.println(F("[WiFi] Not initialized"));
-        }
-        return true;
-    }
-
-    if (strcmp(arg, "status") == 0) {
-        if (tcpServer_) {
-            tcpServer_->printDiagnostics(out_);
-        } else if (wifiManager_) {
-            wifiManager_->printStatus();
-        } else {
-            out_.println(F("[WiFi] Not initialized"));
-        }
-        return true;
-    }
-
-    if (strncmp(arg, "ssid ", 5) == 0) {
-        const char* ssid = arg + 5;
-        while (*ssid == ' ') ssid++;
-        if (*ssid == '\0') {
-            out_.println(F("Usage: wifi ssid <name>"));
-            return true;
-        }
-        if (wifiManager_) {
-            wifiManager_->setSsid(ssid);
-        }
-        return true;
-    }
-
-    if (strncmp(arg, "pass ", 5) == 0) {
-        const char* pass = arg + 5;
-        while (*pass == ' ') pass++;
-        if (*pass == '\0') {
-            out_.println(F("Usage: wifi pass <key>"));
-            return true;
-        }
-        if (wifiManager_) {
-            wifiManager_->setPassword(pass);
-        }
-        return true;
-    }
-
-    if (strcmp(arg, "connect") == 0) {
-        if (wifiManager_) {
-            wifiManager_->connect();
-        }
-        if (tcpServer_) {
-            tcpServer_->printDiagnostics(out_);
-        }
-        return true;
-    }
-
-    if (strcmp(arg, "disconnect") == 0) {
-        out_.println(F("[WiFi] Connection managed by Core 0 TCP task"));
-        return true;
-    }
-
-    if (strcmp(arg, "clear") == 0) {
-        if (wifiManager_) {
-            wifiManager_->clearCredentials();
-        }
-        return true;
-    }
-
-    if (strcmp(arg, "scan") == 0) {
-        out_.println(F("[WiFi] Scanning..."));
-        int n = WiFi.scanNetworks();
-        if (n == 0) {
-            out_.println(F("[WiFi] No networks found"));
-        } else {
-            out_.print(F("[WiFi] Found "));
-            out_.print(n);
-            out_.println(F(" networks:"));
-            for (int i = 0; i < n && i < 10; i++) {
-                out_.print(F("  "));
-                out_.print(WiFi.SSID(i));
-                out_.print(F(" ("));
-                out_.print(WiFi.RSSI(i));
-                out_.print(F("dBm) ch="));
-                out_.println(WiFi.channel(i));
-            }
-        }
-        WiFi.scanDelete();
-        return true;
-    }
-
-    if (strncmp(arg, "ota", 3) == 0 && (arg[3] == '\0' || arg[3] == ' ')) {
-        // The unsigned HTTP pull OTA is gone: only signed, released firmware reaches a
-        // device (docs/RELEASE_PROCESS.md). ESP32-S3 OTA (signed, dual app slots with
-        // rollback) is a later phase of #50; until then it is flashed over USB.
-        out_.println(F("{\"error\":\"wifi ota removed: unsigned firmware is refused (signed ESP32-S3 OTA is not built yet)\"}"));
-        return true;
-    }
-
-    out_.println(F("Usage: wifi [ssid <name>|pass <key>|connect|disconnect|clear|scan|status]"));
+    (void)arg;
+    out_.println(F("{\"error\":\"wifi disabled: no network command server until an authenticated design lands\"}"));
     return true;
 #else
     // WiFi not available on nRF52840
