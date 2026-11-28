@@ -54,7 +54,6 @@
 #include "audio/AudioTracker.h"              // Simplified ACF+Comb+PLL tracker (v74)
 
 #ifdef BLINKY_PLATFORM_ESP32S3
-#include <ESPmDNS.h>
 #include "hal/hardware/Esp32RmtLedStrip.h"  // Async RMT driver (ESP32-S3)
 #endif
 
@@ -119,8 +118,6 @@ RecordStream recordStream;         // Phone record mode: raw PCM + analysis over
 #include "hal/MemTelemetry.h"
 BleAdvertiser bleAdvertiser;       // BLE advertising broadcaster (sends fleet commands)
 Esp32BleNus esp32BleNus;           // BLE NUS peripheral (serial-over-BLE for fleet server)
-WifiManager wifiManager;           // WiFi credential storage and connection
-WifiCommandServer tcpServer;       // TCP command server for wireless fleet management
 #endif
 
 uint32_t lastMs = 0;
@@ -766,26 +763,13 @@ void setup() {
   // Wire BLE NUS TX as TeeStream secondary — serial output goes to both
   // USB Serial and BLE NUS, enabling bidirectional serial-over-BLE.
   console->setEsp32BleNus(&esp32BleNus);
-  wifiManager.begin();  // Loads stored credentials from NVS
-  console->setWifiManager(&wifiManager);
-  // Connect WiFi on Core 1 (where the ESP32 WiFi event loop runs),
-  // then hand off the TCP server to Core 0 for non-blocking accept/read/write.
-  tcpServer.setConsole(console);
-  console->setTcpServer(&tcpServer);
-  // No network firmware upload (the ArduinoOTA listener with a shared password is
-  // gone): only signed, released firmware reaches a device. Signed ESP32-S3 OTA with
+  // No Wi-Fi. The unauthenticated TCP command server (and the credential commands
+  // that started it) is gone until a real, authenticated design lands
+  // (docs/NEXTGEN_ESP32S3_PLAN.md). Nothing in the sketch uses the WiFi library, so the
+  // radio is never initialised: BLE is the only radio on. No network firmware upload either:
+  // only signed, released firmware reaches a device. Signed ESP32-S3 OTA with
   // rollback is a later phase (#50); the partition table already has both app slots.
-  // Try WiFi connect in setup (up to 10s). If it fails, auto-reconnect in loop().
-  if (wifiManager.hasCredentials()) {
-      wifiManager.connect();
-  } else {
-      // No credentials — disable the radio entirely.
-      // Without this, the WiFi event task keeps running at high FreeRTOS priority
-      // and preempts the render loop with irregular ~5-20ms bursts, causing frame jitter.
-      WiFi.mode(WIFI_OFF);
-      SerialConsole::logDebug(F("WiFi disabled (no credentials)"));
-  }
-  SerialConsole::logDebug(F("ESP32-S3 BLE + WiFi initialized"));
+  SerialConsole::logDebug(F("ESP32-S3 BLE initialized (Wi-Fi off)"));
 #endif
 
   // FIX: Reset frame timing to prevent stale state from previous boot
@@ -1055,35 +1039,6 @@ void loop() {
   }  // bleReady
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   esp32BleNus.update();  // Drain BLE NUS TX buffer
-  tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)
-  // Monitor WiFi and auto-reconnect
-  {
-      static bool wasConnected = false;
-      static bool servicesStarted = false;
-      bool isConnected = (WiFi.status() == WL_CONNECTED);
-      if (isConnected && !wasConnected) {
-          // Always disable power management and set max TX on (re)connect
-          WiFi.setSleep(false);
-          WiFi.setTxPower(WIFI_POWER_19_5dBm);
-          if (!servicesStarted) {
-              // First connection: start TCP server
-              tcpServer.begin();
-              servicesStarted = true;
-          }
-          // (Re)start mDNS on every reconnect — IP may have changed
-          MDNS.end();
-          MDNS.begin("blinky");
-          MDNS.addService("blinky", "tcp", 3333);  // Fleet discovery
-          Serial.print(F("[WiFi] Connected: "));
-          Serial.print(WiFi.localIP());
-          Serial.print(F(" RSSI="));
-          Serial.println(WiFi.RSSI());
-      } else if (!isConnected && wasConnected) {
-          Serial.println(F("[WiFi] Disconnected, reconnecting..."));
-          WiFi.reconnect();
-      }
-      wasConnected = isConnected;
-  }
 #endif
 
   // Battery monitoring - periodic voltage check. Gated on `battery`

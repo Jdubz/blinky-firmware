@@ -26,7 +26,7 @@ This is an embedded LED controller (XIAO nRF52840 Sense). Ways to reach a device
 
 - **USB serial**: the full command console (physical access required).
 - **Bluetooth**: the firmware advertises a Nordic UART service (NUS) that carries the same console, and a BLE DFU service. Neither uses pairing, so any Bluetooth device in range can connect. It also listens for fleet broadcast commands from blinky-server.
-- **No WiFi** on the nRF52840 fleet.
+- **No WiFi** on the nRF52840 fleet, nor on the next-generation XIAO ESP32-S3 build: its old unauthenticated Wi-Fi command server was removed, and the radio stays off until an authenticated design lands.
 
 ### Firmware Updates
 
