@@ -1,6 +1,6 @@
 # Next-gen fixtures: XIAO ESP32-S3 Sense, dual-core
 
-**Status:** planned (decided 2026-10-15; no implementation work yet). The current fleet stays on the XIAO nRF52840 (Sense and Sense Plus); nothing here changes deployed devices. The next generation of fixtures is built on the XIAO ESP32-S3 Sense. Owner priority P3 (2026-11-23): ESP32-S3 dual-core, and NN feasibility there.
+**Status:** phase A done (2026-11-27): the ESP32-S3 build is back, single-core (see "What carries over"). The dual-core split, the flash-write stall work, OTA and the NN investigation are still ahead. Decided 2026-10-15. The current fleet stays on the XIAO nRF52840 (Sense and Sense Plus); nothing here changes deployed devices. The next generation of fixtures is built on the XIAO ESP32-S3 Sense. Owner priority P3 (2026-11-23): ESP32-S3 dual-core, and NN feasibility there.
 
 **The onset NN is shelved on the current fleet.** On the nRF52840 it at best ties SuperFlux on the drum metrics, and a tie goes to flux. Whether a drum-hit NN earns its place on the S3 (its CPU and PSRAM headroom, every-frame inference, beating SuperFlux on kick/snare recall, on-drum share and `repS`) is the P3 investigation. The plan below assumes an NN listener; if the investigation says no, the listener core runs SuperFlux and the architecture is unchanged.
 
@@ -40,10 +40,18 @@ Core 0 (PRO_CPU): renderer             Core 1 (APP_CPU): listener
 
 ## What carries over
 
-- **Already in the tree, dormant:** `hal/hardware/Esp32PdmMic`, `comms/Esp32BleNus`, `comms/WifiManager`, `comms/WifiCommandServer`, `comms/BleAdvertiser`, and the `BLINKY_PLATFORM_ESP32S3` branches in `hal/PlatformDetect.h` and the files that use it. CI no longer builds them, so expect bit-rot to fix first.
+- **Phase A, done (#50):** the current tree builds for the XIAO ESP32-S3 under a pinned toolchain. That toolchain is `tools/firmware_toolchain_esp32s3.json`: arduino-esp32 `3.3.12`, NimBLE-Arduino `2.5.2`, OPI PSRAM, and the `default_8MB` partitions (two OTA app slots, chosen now so OTA won't need a repartition). CI compiles it (`Compile Firmware (ESP32-S3)`), and every staging build and candidate carries `blinky-things-b<N>-esp32s3.bin` (the full flash image at `0x0`) and `.app.bin` (`docs/RELEASE_PROCESS.md`, "The ESP32-S3 image"). It runs single-core: renderer and audio in the normal loop, as on the nRF52840. The nRF52840 build is unchanged (its fingerprint image is byte-identical). What the S3 has in place of the nRF52840's platform code:
+  - **LEDs:** `Esp32RmtLedStrip` (RMT; DMA on the one channel that has it). `show()` hands off and never waits, with the same staged-frame / latest-wins contract and `ledFps` / `ledSuperseded` / `ledTxStackFree` as `Nrf52PwmLedStrip`. `ledPin` is a GPIO number (D0 = GPIO1).
+  - **Settings and device config:** NVS (`Preferences`, namespace `blinky`), the same `ConfigData` and the same `device upload` JSON. Saves are synchronous NVS writes; whether they hitch a frame is part of the flash-write stall work below.
+  - **Serial output:** the `SerialOut` ring and low-priority drain task (#23 / fw#85) on HWCDC. Without it, HWCDC's write waits up to ~2 s for a host that isn't reading.
+  - **Watchdog and crash loops:** the task watchdog (15 s, a panic on timeout) with an RTC no-init boot counter. After 3 failed boots the chip parks in ROM download mode. The `RebootFrequencyCounter` lives in NVS (`blinkyboot`) and quarantines the device config after 5 fault resets. `json info` `resetReason` uses the nRF52840's RESETREAS bits.
+  - **`json info`:** the same fields as the nRF52840, the stack, heap and `streamDropped` ones included (except `recStackFree`, since record mode is nRF52840-only), with `platform: "esp32s3"`.
+  - **BLE:** NUS lines run on the loop task (the queue BleNus got in #173). The advertised name follows the nRF52840's `Blinky-<deviceId>-<sn2>` scheme. The mic (`Esp32PdmMic`, GPIO42/41 on the Sense board), Wi-Fi and the fleet advertiser are the March 2026 code, now compiling again.
+  - **Removed:** the unsigned network firmware paths (the ArduinoOTA listener with a shared password, and `wifi ota <url>`). Only signed, released firmware reaches a device; signed S3 OTA comes later.
+  - **Not verified on hardware yet:** the box's S3 has no flash path yet (blinky_time's agent is building it on this image). The first flash will show whether the mic, LEDs, BLE and Wi-Fi run as built.
 - **Portable code:** generators, effects, render pipeline, `AudioTracker`, `SharedSpectralAnalysis` (needs an ESP-DSP FFT in place of CMSIS), `FrameOnsetNN` (TFLite Micro, using ESP-NN kernels), and the settings/config storage logic.
 - **Tooling:** the `tests/tracker` harness and corpus gate are platform-independent, and the validation corpus stays `corpus/edm/` (CLAUDE.md).
-- **Release discipline:** the same channels apply (stable / candidate / dev, `docs/RELEASE_PROCESS.md`). Two gaps to close first: ESP32-S3 builds are not under the pinned toolchain yet (`scripts/build.sh --esp32` uses the machine's own arduino-cli setup), and the release workflow builds only the nRF52840 image. The signed-manifest format (`tools/ota_manifest.py`, Ed25519) can be reused for ESP32-S3 OTA.
+- **Release discipline:** the same channels apply (stable / candidate / dev, `docs/RELEASE_PROCESS.md`). The S3 image ships in every candidate but isn't gated, signed or promoted yet. The signed-manifest format (`tools/ota_manifest.py`, Ed25519) can be reused for ESP32-S3 OTA.
 
 ## Known risks (from the March 2026 cut and since)
 
@@ -150,10 +158,10 @@ This prevents the ESP32 toolchain from seeing `PDM.h` (which doesn't exist on ES
 | Feature | nRF52840 | ESP32-S3 |
 |---------|----------|----------|
 | PDM mic | Hardware PDM interrupt → `onReceive()` callback | I2S peripheral, polling via `poll()` in `AdaptiveMic::update()` |
-| Flash storage | `mbed::FlashIAP` / `InternalFileSystem` | `Preferences` (NVS key-value store) |
+| Flash storage | settings journal + `InternalFileSystem` | `Preferences` (NVS key-value store) |
 | Battery monitor | GPIO + ADC divider circuit | Not available — all pins set to -1 |
-| Compile output | `.hex` → convert to `.uf2` via `uf2conv.py` | `.bin` → convert to `.uf2` via `uf2conv.py -b 0x10000` |
-| UF2 family ID | `0xADA52840` | `0xc47e5767` |
+| Compile output | `.hex` → `.uf2` via `uf2conv.py` | `.ino.merged.bin` (full flash image, `0x0`) and `.ino.bin` (app, `0x10000`); flashed with esptool, no UF2 |
+| LED pin numbers | Arduino pin numbers (D0..D10) | GPIO numbers (D0 = GPIO1) |
 
 ### Common Pitfalls
 
@@ -178,7 +186,7 @@ The mbed and non-mbed Seeeduino nRF52 cores define different macros. `PlatformDe
 
 ```bash
 ./scripts/build.sh --no-bump          # nRF52840, inside the pinned toolchain
-./scripts/build.sh --esp32 --no-bump  # ESP32-S3 (next gen; not pinned yet)
+./scripts/build.sh --esp32 --no-bump  # ESP32-S3, inside its pinned toolchain (.arduino-esp32s3/)
 ```
 
-Or via Makefile: `make compile-out` and `make esp32-compile`. Don't call `arduino-cli compile` directly for the nRF52840: it would bypass the pinned toolchain in `.arduino/`.
+Or via Makefile: `make compile-out` and `make esp32-compile`. Don't call `arduino-cli compile` directly: it would bypass the pinned toolchains.
