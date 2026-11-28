@@ -1,6 +1,12 @@
 # Source this file (don't run it): isolated arduino-cli environment (#252).
 #
-#   source scripts/arduino_env.sh
+#   source scripts/arduino_env.sh                         # nRF52840 (the fleet)
+#   BLINKY_TARGET=esp32s3 source scripts/arduino_env.sh   # XIAO ESP32-S3 (next gen, #50)
+#
+# Each target has its own pin file and its own isolated directory, so the two
+# toolchains never share a core, a library or a cache:
+#   nrf52840  tools/firmware_toolchain.json          -> <repo>/.arduino
+#   esp32s3   tools/firmware_toolchain_esp32s3.json  -> <repo>/.arduino-esp32s3
 #
 # Every firmware build uses ONLY the pinned toolchain installed under
 # <repo>/.arduino by scripts/setup_toolchain.sh: the Seeeduino core (with its
@@ -14,10 +20,20 @@
 # paths, so they are converted with cygpath -m.
 
 BLINKY_ROOT="$(git rev-parse --show-toplevel)"
-BLINKY_ARDUINO_DIR="$BLINKY_ROOT/.arduino"
+BLINKY_TARGET="${BLINKY_TARGET:-nrf52840}"
+case "$BLINKY_TARGET" in
+    nrf52840)
+        BLINKY_ARDUINO_DIR="$BLINKY_ROOT/.arduino"
+        BLINKY_TOOLCHAIN_JSON="$BLINKY_ROOT/tools/firmware_toolchain.json" ;;
+    esp32s3)
+        BLINKY_ARDUINO_DIR="$BLINKY_ROOT/.arduino-esp32s3"
+        BLINKY_TOOLCHAIN_JSON="$BLINKY_ROOT/tools/firmware_toolchain_esp32s3.json" ;;
+    *)
+        echo "ERROR: unknown BLINKY_TARGET '$BLINKY_TARGET' (nrf52840 or esp32s3)" >&2
+        return 1 2>/dev/null || exit 1 ;;
+esac
 BLINKY_ARDUINO_PACKAGES="$BLINKY_ARDUINO_DIR/data/packages"
 BLINKY_ARDUINO_LIBRARIES="$BLINKY_ARDUINO_DIR/user/libraries"
-BLINKY_TOOLCHAIN_JSON="$BLINKY_ROOT/tools/firmware_toolchain.json"
 
 _blinky_native() {
     if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else echo "$1"; fi
@@ -38,11 +54,12 @@ export ARDUINO_LIBRARY_ENABLE_UNSAFE_INSTALL=true
 export ARDUINO_UPDATER_ENABLE_NOTIFICATION=false
 
 BLINKY_FQBN="$(_blinky_tc fqbn)"
-BLINKY_CORE="$(_blinky_tc core)"            # e.g. Seeeduino:nrf52@1.1.10
+BLINKY_CORE="$(_blinky_tc core)"            # e.g. Seeeduino:nrf52@1.1.10, esp32:esp32@3.3.12
 BLINKY_CORE_VERSION="${BLINKY_CORE##*@}"
-BLINKY_CORE_DIR="$BLINKY_ARDUINO_PACKAGES/Seeeduino/hardware/nrf52/$BLINKY_CORE_VERSION"
+_blinky_core_id="${BLINKY_CORE%@*}"          # <packager>:<arch>
+BLINKY_CORE_DIR="$BLINKY_ARDUINO_PACKAGES/${_blinky_core_id%%:*}/hardware/${_blinky_core_id##*:}/$BLINKY_CORE_VERSION"
 BLINKY_ARDUINO_CLI_VERSION="$(_blinky_tc arduino_cli)"
-# Link flag every nRF52840 build needs (build.sh and in_toolchain.sh pass it):
+# Link flag every nRF52840 build needs (not the ESP32-S3's) (build.sh and in_toolchain.sh pass it):
 # the settings journal (blinky-things/config/NrfJournalFlash.h, #49) takes its
 # own flash completion events before the core's InternalFS handler sees them.
 # A build without it fails to link (__real_flash_nrf5x_event_cb undefined).

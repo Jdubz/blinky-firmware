@@ -5,6 +5,7 @@
     "bootloader/",
     "patches/",
     "tools/firmware_toolchain.json",
+    "tools/firmware_toolchain_esp32s3.json",
     "tools/setup_tflite_lib.sh",
     "tools/check_build_libs.py",
     "tools/firmware_release.py",

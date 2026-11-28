@@ -24,11 +24,8 @@
 # Configuration
 SKETCH_DIR = blinky-things
 FQBN = Seeeduino:nrf52:xiaonRF52840Sense
-# USBMode=hwcdc required for serial on ESP32 core 3.3.7+ (core bug: TinyUSB mode
-# has unresolved HWCDCSerial refs in chip-debug-report.cpp). This enables the
-# USB_SERIAL_JTAG peripheral which shares GPIO42/41 with the PDM mic — see
-# Esp32PdmMic::begin() for the gpio_reset_pin() workaround.
-ESP32_FQBN = esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240
+# The ESP32-S3's FQBN and toolchain are pinned in tools/firmware_toolchain_esp32s3.json;
+# esp32-compile builds through scripts/build.sh --esp32 (its own isolated .arduino-esp32s3).
 BAUD_RATE = 115200
 
 # Default values
@@ -37,7 +34,6 @@ PORT ?= COM3
 # UF2 upload settings (Linux)
 UPLOAD_PORT ?= /dev/ttyACM0
 BUILD_OUTPUT_DIR ?= /tmp/blinky-build
-ESP32_BUILD_OUTPUT_DIR ?= /tmp/blinky-esp32-build
 UF2_UPLOAD_TOOL = tools/uf2_upload.py
 
 # Arduino CLI detection — must be on PATH
@@ -83,10 +79,9 @@ help:
 	@echo "  uf2-test         - Verify upload infrastructure is ready"
 	@echo "  safety-check     - Run pre-compile safety checks only"
 	@echo ""
-	@echo "ESP32-S3 (next-gen; not on the pinned toolchain):"
-	@echo "  esp32-compile    - Compile for XIAO ESP32-S3"
-	@echo "  esp32-uf2-upload - Compile + upload to ESP32-S3 via UF2"
-	@echo "  esp32-uf2-check  - Compile + validate UF2 (dry run)"
+	@echo "ESP32-S3 (next gen, pinned toolchain in .arduino-esp32s3/):"
+	@echo "  setup-toolchain-esp32s3 - Install it (once per machine)"
+	@echo "  esp32-compile    - Compile for XIAO ESP32-S3 (scripts/build.sh --esp32 --no-bump)"
 	@echo ""
 	@echo "Setup:"
 	@echo "  setup-toolchain  - Pinned, isolated firmware toolchain in .arduino/ (once per machine)"
@@ -235,32 +230,23 @@ setup-tflite:
 
 # --- ESP32-S3 targets (XIAO ESP32-S3 / Display board) ---
 
-# Compile for ESP32-S3
+# Pinned ESP32-S3 toolchain (tools/firmware_toolchain_esp32s3.json -> .arduino-esp32s3)
+.PHONY: setup-toolchain-esp32s3
+setup-toolchain-esp32s3:
+	@bash scripts/setup_toolchain.sh --target esp32s3
+
+# Compile for ESP32-S3 inside its pinned toolchain. Output: /tmp/blinky-build-esp32s3
+# (blinky-things.ino.merged.bin: the full flash image at 0x0; blinky-things.ino.bin: the app).
 .PHONY: esp32-compile
-esp32-compile: check-arduino-cli version
-	@echo ""
-	@echo "========================================"
-	@echo "Compiling for XIAO ESP32-S3"
-	@echo "========================================"
-	@echo "Sketch: $(SKETCH_DIR)"
-	@echo "Board:  $(ESP32_FQBN)"
-	@$(ARDUINO_CLI) compile --fqbn $(ESP32_FQBN) --output-dir $(ESP32_BUILD_OUTPUT_DIR) $(SKETCH_DIR)/
-	@echo "Compilation successful!"
-	@echo "UF2 output: $(ESP32_BUILD_OUTPUT_DIR)/blinky-things.ino.uf2"
+esp32-compile:
+	@bash scripts/build.sh --esp32 --no-bump
 
-# UF2 upload to ESP32-S3: compile + upload via UF2 mass-storage bootloader
-.PHONY: esp32-uf2-upload
-esp32-uf2-upload: esp32-compile
-	@echo ""
-	@echo "========================================"
-	@echo "UF2 Upload to ESP32-S3 on $(UPLOAD_PORT)"
-	@echo "========================================"
-	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --board esp32s3 --build-dir $(ESP32_BUILD_OUTPUT_DIR) $(if $(VERBOSE),--verbose)
-
-# Dry run: compile + validate only (no upload)
-.PHONY: esp32-uf2-check
-esp32-uf2-check: esp32-compile
-	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --board esp32s3 --build-dir $(ESP32_BUILD_OUTPUT_DIR) --dry-run
+# The ESP32-S3 has no UF2 bootloader in this build (default_8MB partitions); it is
+# flashed with esptool through blinky-server, like every device.
+.PHONY: esp32-uf2-upload esp32-uf2-check
+esp32-uf2-upload esp32-uf2-check:
+	@echo "REFUSED: the ESP32-S3 has no UF2 bootloader; flash it through blinky-server (esptool)." >&2
+	@exit 1
 
 # Quick aliases (flash is refused, like upload)
 .PHONY: build flash serial boards

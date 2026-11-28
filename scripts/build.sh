@@ -4,12 +4,13 @@
 # Usage:
 #   ./scripts/build.sh                    # compile only (nRF52840)
 #   ./scripts/build.sh --upload PORT      # compile + upload via UF2
-#   ./scripts/build.sh --esp32 [--upload PORT]  # ESP32-S3 target
+#   ./scripts/build.sh --esp32            # XIAO ESP32-S3 (next gen, #50), its own pinned toolchain
 #   ./scripts/build.sh --no-bump          # compile without incrementing
 #   ./scripts/build.sh --dev              # local dev build: no bump, version b<N>-dev-<sha>
 #   ./scripts/build.sh --dev --ota-bench-key   # dev build trusting the bench OTA key (signed-OTA bench tests)
 #   ./scripts/build.sh --build N          # exact build number, no bump (release CI)
 #   ./scripts/build.sh --fingerprint      # fixed version fields, isolated build: an image to hash only
+#   ./scripts/build.sh --esp32 --fingerprint   # the same for the ESP32-S3 (/tmp/blinky-fingerprint-esp32s3)
 #
 # Releases are built by .github/workflows/release.yml, not locally; see
 # docs/RELEASE_PROCESS.md. Local builds are for one test device only.
@@ -17,6 +18,12 @@
 # The build number in blinky-things/BUILD_NUMBER is incremented on each
 # compile and baked into the firmware via types/Version.h. This is the
 # sole firmware version identifier — not tied to git tags or branches.
+#
+# --esp32 combines with --no-bump, --dev, --build N and --fingerprint. Its output goes to
+# /tmp/blinky-build-esp32s3 (the nRF52840's to /tmp/blinky-build), so one job can
+# build both: blinky-things.ino.bin (the app, for OTA later, flashed at 0x10000)
+# and blinky-things.ino.merged.bin (bootloader + partition table + otadata + app,
+# padded to 8 MB, flashed at 0x0), among others.
 #
 # Note: not safe for concurrent builds (two simultaneous runs could
 # produce the same build number). Fine for single-developer use.
@@ -79,10 +86,12 @@ fi
 # --fingerprint: an image to hash, never to flash or ship. Its own output, build and cache
 # paths, so it shares no compiled object with a real build (in either direction), and a
 # fixed SOURCE_DATE_EPOCH, so any __DATE__/__TIME__ in the core or libraries is fixed too.
+# With --esp32 (the only option it combines with), its own directory again.
 FP_DIR="/tmp/blinky-fingerprint"
+$ESP32 && FP_DIR="/tmp/blinky-fingerprint-esp32s3"
 if $FINGERPRINT; then
-    if $DEV || $UPLOAD || $ESP32 || $OTA_BENCH_KEY || [[ -n "$FORCE_BUILD" ]]; then
-        echo "Error: --fingerprint takes no other option" >&2
+    if $DEV || $UPLOAD || $OTA_BENCH_KEY || [[ -n "$FORCE_BUILD" ]]; then
+        echo "Error: --fingerprint takes no other option (but --esp32)" >&2
         exit 1
     fi
     rm -rf "$FP_DIR"
@@ -90,14 +99,34 @@ if $FINGERPRINT; then
     export SOURCE_DATE_EPOCH=0
 fi
 
+if $ESP32; then
+    # No device is flashed from here: an ESP32-S3 gets its image through
+    # blinky-server's flash path (esptool), like every other device.
+    if $UPLOAD; then
+        echo "Error: --upload is not supported with --esp32 (flash through blinky-server)" >&2
+        exit 1
+    fi
+    # Signed OTA (blinky-things/ota/) is nRF52840-only so far.
+    if $OTA_BENCH_KEY; then
+        echo "Error: --ota-bench-key is nRF52840-only" >&2
+        exit 1
+    fi
+    $FINGERPRINT || OUTPUT_DIR="/tmp/blinky-build-esp32s3"
+fi
+
 # --- Pinned, isolated toolchain (#252) ---
 # nRF52840 builds use ONLY <repo>/.arduino (scripts/setup_toolchain.sh): the
 # pinned core with its patched TinyUSB and exactly the pinned libraries.
 # Nothing in this machine's own Arduino folders can shadow a library (a
 # user-installed, unpatched TinyUSB 3.4.5 got into b209-b213 that way).
-# ESP32-S3 (next gen) is not under the pinned toolchain yet and builds with
-# the machine's own arduino-cli setup.
-if ! $ESP32; then
+# ESP32-S3 builds use ONLY <repo>/.arduino-esp32s3 (setup_toolchain.sh
+# --target esp32s3), pinned in tools/firmware_toolchain_esp32s3.json.
+if $ESP32; then
+    export BLINKY_TARGET=esp32s3
+    source scripts/arduino_env.sh
+    blinky_require_toolchain "$ARDUINO_CLI" || exit 1
+else
+    export BLINKY_TARGET=nrf52840
     source scripts/arduino_env.sh
     blinky_require_toolchain "$ARDUINO_CLI" || exit 1
     # Both core patches present (the firmware also #errors without the
@@ -132,7 +161,7 @@ fi
 
 # --- Select FQBN ---
 if $ESP32; then
-    FQBN='esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,PSRAM=opi'
+    FQBN="$BLINKY_FQBN"   # tools/firmware_toolchain_esp32s3.json
 else
     FQBN='Seeeduino:nrf52:xiaonRF52840Sense'
 fi
@@ -154,27 +183,20 @@ if $FINGERPRINT; then
     COMPILE_ARGS+=(--build-path "$FP_DIR/build" --build-cache-path "$FP_DIR/cache")
 fi
 
-if $UPLOAD && $ESP32; then
-    COMPILE_ARGS=(compile --upload --fqbn "$FQBN" -p "$UPLOAD_PORT")
+# --verbose so the library resolution can be checked; the full log is
+# kept, only the summary is shown.
+mkdir -p "$OUTPUT_DIR"
+COMPILE_LOG="$OUTPUT_DIR/compile.log"
+if ! "$ARDUINO_CLI" "${COMPILE_ARGS[@]}" --verbose blinky-things > "$COMPILE_LOG" 2>&1; then
+    # No pipe: under pipefail, `| head` SIGPIPEs grep (exit 141) and a log with no
+    # "error" line makes grep exit 1; either way the script died before saying why.
+    grep -m 40 -E "error|Error" "$COMPILE_LOG" >&2 || true
+    echo "Compilation failed (full log: $COMPILE_LOG)" >&2
+    exit 1
 fi
-
-if $ESP32; then
-    "$ARDUINO_CLI" "${COMPILE_ARGS[@]}" blinky-things
-else
-    # --verbose so the library resolution can be checked; the full log is
-    # kept, only the summary is shown.
-    mkdir -p "$OUTPUT_DIR"
-    COMPILE_LOG="$OUTPUT_DIR/compile.log"
-    if ! "$ARDUINO_CLI" "${COMPILE_ARGS[@]}" --verbose blinky-things > "$COMPILE_LOG" 2>&1; then
-        # No pipe: under pipefail, `| head` SIGPIPEs grep (exit 141) and a log with no
-        # "error" line makes grep exit 1; either way the script died before saying why.
-        grep -m 40 -E "error|Error" "$COMPILE_LOG" >&2 || true
-        echo "Compilation failed (full log: $COMPILE_LOG)" >&2
-        exit 1
-    fi
-    grep -E "^Sketch uses|^Global variables" "$COMPILE_LOG" || true
-    "$PYTHON" tools/check_build_libs.py "$COMPILE_LOG" --out "$OUTPUT_DIR/libraries.json" || exit 1
-fi
+grep -E "^Sketch uses|^Global variables" "$COMPILE_LOG" || true
+"$PYTHON" tools/check_build_libs.py "$COMPILE_LOG" --target "$BLINKY_TARGET" \
+    --out "$OUTPUT_DIR/libraries.json" || exit 1
 
 # Save build number only AFTER successful compile (no gaps on failure)
 if $BUMP; then

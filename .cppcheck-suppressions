@@ -77,3 +77,9 @@ badBitmaskCheck:blinky-things/inputs/SerialConsole.cpp
 # Vendored third-party code (unmodified; see blinky-things/ota/monocypher/README.md)
 # ============================================
 *:blinky-things/ota/monocypher/*
+
+# FrameOnsetNN has two definitions, never in one build: the TFLite class in
+# audio/FrameOnsetNN.h, and the stub in audio/AudioTracker.h for builds without
+# TFLite (host harness; the ESP32-S3 while its NN is off, #50). cppcheck's
+# cross-TU check sees both across its preprocessor configurations.
+ctuOneDefinitionRuleViolation:blinky-things/audio/FrameOnsetNN.h

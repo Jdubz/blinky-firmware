@@ -17,9 +17,12 @@
 #  endif
 #endif
 
-#if ((defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)) && !defined(BLINKY_HOST_HARNESS))     || defined(BLINKY_HOST_NN)
-// Device builds, and host harness builds linked against a host-compiled
-// TFLite Micro (BLINKY_HOST_NN, see tests/tracker/README.md, #203).
+#if (defined(BLINKY_PLATFORM_NRF52840) && !defined(BLINKY_HOST_HARNESS))     || defined(BLINKY_HOST_NN) \
+    || (defined(BLINKY_PLATFORM_ESP32S3) && BLINKY_ONSET_NN_ENABLED)
+// nRF52840 device builds, and host harness builds linked against a host-compiled
+// TFLite Micro (BLINKY_HOST_NN, see tests/tracker/README.md, #203). The ESP32-S3
+// links no TFLite while its NN is off (its toolchain pins none; an S3 onset NN on
+// ESP-NN kernels is the P3 investigation, #50), and takes the stub below.
 #include "FrameOnsetNN.h"
 #else
 // Host builds without TFLite (default tests/tracker/ harness): the tracker
