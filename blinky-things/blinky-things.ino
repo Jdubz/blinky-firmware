@@ -54,9 +54,8 @@
 #include "audio/AudioTracker.h"              // Simplified ACF+Comb+PLL tracker (v74)
 
 #ifdef BLINKY_PLATFORM_ESP32S3
-#include <ArduinoOTA.h>
 #include <ESPmDNS.h>
-#include <HTTPUpdate.h>
+#include "hal/hardware/Esp32RmtLedStrip.h"  // Async RMT driver (ESP32-S3)
 #endif
 
 // Runtime Device Configuration (v28+)
@@ -117,6 +116,7 @@ bool bleReady = false;             // Bluefruit.begin() succeeded (SoftDevice en
 RecordStream recordStream;         // Phone record mode: raw PCM + analysis over BLE (docs/PHONE_RECORD_MODE_PLAN.md)
 #elif defined(BLINKY_PLATFORM_ESP32S3)
 #include "comms/Esp32BleNus.h"
+#include "hal/MemTelemetry.h"
 BleAdvertiser bleAdvertiser;       // BLE advertising broadcaster (sends fleet commands)
 Esp32BleNus esp32BleNus;           // BLE NUS peripheral (serial-over-BLE for fleet server)
 WifiManager wifiManager;           // WiFi credential storage and connection
@@ -205,6 +205,8 @@ void setup() {
   // The core runs setup() inside its "loop" task; record the handle so
   // `json info` can report that task's stack headroom from any task.
   MemTelemetry::captureLoopTask();
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+  MemTelemetry::captureLoopTask();  // as on the nRF52840: setup() runs on the loop task
 #endif
   // CRITICAL: Hardware watchdog + boot counter — catches HardFaults, heap
   // exhaustion, infinite loops. After 3 consecutive failed boots, automatically
@@ -440,6 +442,49 @@ void setup() {
         Serial.println(F(")"));
       }
     }
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+    // ESP32-S3: the RMT driver, the counterpart of the nRF52840's PWM + EasyDMA one:
+    // show() hands the frame to a transmit task and never waits on the wire
+    // (Esp32RmtLedStrip.h). ledPin / ledPin2 are GPIO numbers here (D0 = GPIO1).
+    // Two strands split the pixels evenly, as on the nRF52840.
+    bool useComposite = false;
+    if (config.matrix.ledPin2 != 0 && (numLeds % 2 == 0)) {
+      const uint16_t halfLeds = numLeds / 2;
+      Serial.print(F("[INFO] Multi-strand init: "));
+      Serial.print(halfLeds);
+      Serial.print(F(" LEDs on GPIO"));
+      Serial.print(config.matrix.ledPin);
+      Serial.print(F(" + "));
+      Serial.print(halfLeds);
+      Serial.print(F(" LEDs on GPIO"));
+      Serial.println(config.matrix.ledPin2);
+      auto* s1 = new(std::nothrow) Esp32RmtLedStrip(halfLeds, config.matrix.ledPin, config.matrix.ledType);
+      auto* s2 = new(std::nothrow) Esp32RmtLedStrip(halfLeds, config.matrix.ledPin2, config.matrix.ledType);
+      CompositeLedStrip* composite = nullptr;
+      if (s1 && s1->isValid() && s2 && s2->isValid()) {
+        composite = new(std::nothrow) CompositeLedStrip(s1, s2);
+      }
+      if (composite) {
+        leds = composite;
+        useComposite = true;
+      } else {
+        Serial.println(F("[ERROR] multi-strand alloc/validity failed — falling back to single-strand"));
+        delete s1;
+        delete s2;
+        ledModeDegraded = true;
+      }
+    }
+    if (!useComposite) {
+      auto* rmtStrip = new(std::nothrow) Esp32RmtLedStrip(numLeds, config.matrix.ledPin, config.matrix.ledType);
+      leds = rmtStrip;  // Assign before validity check so cleanup() can free it
+      if (!rmtStrip || !rmtStrip->isValid()) {
+        haltWithError(F("ERROR: RMT LED strip allocation failed"));
+      }
+      Serial.print(F("[INFO] LED driver: Esp32RmtLedStrip (async, "));
+      Serial.print(numLeds);
+      Serial.println(ledModeDegraded ? F(" LEDs, DEGRADED — multi-strand requested but fell back to single)")
+                                     : F(" LEDs)"));
+    }
 #else
     // Non-nRF52840 platforms: Adafruit NeoPixel (blocking bit-bang)
     neoPixelStrip = new(std::nothrow) Adafruit_NeoPixel(
@@ -588,6 +633,8 @@ void setup() {
   console->begin();
 #ifdef BLINKY_PLATFORM_NRF52840
   console->setResetReason(RebootFrequencyCounter::getLastResetReason());
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+  console->setResetReason(RebootFrequencyCounter::getLastResetReason());  // RESETREAS bits
 #endif
   SerialConsole::logDebug(F("Serial console initialized"));
   // Initialize BLE (nRF52840 only)
@@ -695,8 +742,22 @@ void setup() {
   // to fix NimBLE porting layer crash (arduino-esp32 #12357, #12362).
   bleAdvertiser.begin();
   console->setBleAdvertiser(&bleAdvertiser);
-  // NUS peripheral — bidirectional serial-over-BLE (same as nRF52840 BleNus)
-  esp32BleNus.begin();
+  // NUS peripheral — bidirectional serial-over-BLE (same as nRF52840 BleNus), under the
+  // nRF52840's name scheme; the hardware-unique part is the eFuse MAC (json info "sn").
+  {
+    char bleName[32];
+    const auto& storedDev = configStorage.getDeviceConfig();
+    const uint32_t sn = static_cast<uint32_t>(ESP.getEfuseMac() & 0xFFFFFFFFULL);
+    if (configStorage.isDeviceConfigValid()
+        && storedDev.deviceId[0] != '\0'
+        && strcmp(storedDev.deviceId, "none") != 0) {
+      snprintf(bleName, sizeof(bleName), "Blinky-%.16s-%02lX",
+               storedDev.deviceId, (unsigned long)(sn & 0xFF));
+    } else {
+      snprintf(bleName, sizeof(bleName), "Blinky-%04lX", (unsigned long)(sn & 0xFFFF));
+    }
+    esp32BleNus.begin(bleName);
+  }
   esp32BleNus.setLineCallback([](const char* line) {
       if (console) {
           console->handleCommand(line);
@@ -711,17 +772,9 @@ void setup() {
   // then hand off the TCP server to Core 0 for non-blocking accept/read/write.
   tcpServer.setConsole(console);
   console->setTcpServer(&tcpServer);
-  // Configure OTA callbacks once (begin() called when WiFi connects)
-  ArduinoOTA.setHostname("blinky");
-  ArduinoOTA.setPort(3232);
-  // OTA password is intentional plaintext — ArduinoOTA runs on trusted LAN only
-  // and the ESP32 MD5-hashes it before comparison (never sent in cleartext).
-  ArduinoOTA.setPassword("blinkyota");
-  ArduinoOTA.onStart([]() { Serial.println(F("[OTA] Start")); });
-  ArduinoOTA.onEnd([]() { Serial.println(F("[OTA] Done, rebooting")); });
-  ArduinoOTA.onError([](ota_error_t e) {
-      Serial.print(F("[OTA] Error: ")); Serial.println(e);
-  });
+  // No network firmware upload (the ArduinoOTA listener with a shared password is
+  // gone): only signed, released firmware reaches a device. Signed ESP32-S3 OTA with
+  // rollback is a later phase (#50); the partition table already has both app slots.
   // Try WiFi connect in setup (up to 10s). If it fails, auto-reconnect in loop().
   if (wifiManager.hasCredentials()) {
       wifiManager.connect();
@@ -824,6 +877,12 @@ void loop() {
     lastHeapSampleMs = now ? now : 1;
     MemTelemetry::sampleHeap();
     MallocLock::reportIsrAllocs();
+  }
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+  static uint32_t lastHeapSampleMs = 0;
+  if (lastHeapSampleMs == 0 || now - lastHeapSampleMs >= 1000) {
+    lastHeapSampleMs = now ? now : 1;
+    MemTelemetry::sampleHeap();
   }
 #endif
   static uint32_t lastFpsLogMs = 0;
@@ -997,7 +1056,6 @@ void loop() {
 #elif defined(BLINKY_PLATFORM_ESP32S3)
   esp32BleNus.update();  // Drain BLE NUS TX buffer
   tcpServer.poll();  // Non-blocking TCP accept/read (all on Core 1)
-  ArduinoOTA.handle();  // Non-blocking OTA check (~0.5ms)
   // Monitor WiFi and auto-reconnect
   {
       static bool wasConnected = false;
@@ -1012,14 +1070,10 @@ void loop() {
               tcpServer.begin();
               servicesStarted = true;
           }
-          // (Re)start mDNS and OTA on every reconnect — IP may have changed
+          // (Re)start mDNS on every reconnect — IP may have changed
           MDNS.end();
           MDNS.begin("blinky");
           MDNS.addService("blinky", "tcp", 3333);  // Fleet discovery
-          ArduinoOTA.begin();
-          Serial.print(F("[WiFi] Services started. OTA at "));
-          Serial.print(WiFi.localIP());
-          Serial.println(F(":3232"));
           Serial.print(F("[WiFi] Connected: "));
           Serial.print(WiFi.localIP());
           Serial.print(F(" RSSI="));

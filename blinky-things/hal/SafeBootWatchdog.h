@@ -313,6 +313,97 @@ namespace SafeBootWatchdog {
 
 }  // namespace SafeBootWatchdog
 
+#elif defined(ESP32)
+
+// XIAO ESP32-S3 (next gen, #50): the same three parts on ESP-IDF.
+//   - Boot counter: RTC slow memory left uninitialised at boot (RTC_NOINIT_ATTR).
+//     Like GPREGRET2 it survives software, panic and watchdog resets and is lost on
+//     power-on (a magic word tells a kept value from power-on garbage).
+//   - Watchdog: the ESP-IDF task watchdog, reconfigured to WDT_TIMEOUT_SECONDS with a
+//     panic (and so a reset) on timeout, watching the loop task, which feed() resets.
+//   - Recovery: after BOOT_FAIL_THRESHOLD failed boots, the ROM's USB download mode
+//     (forced through RTC_CNTL_OPTION1, then a restart), where blinky-server's esptool
+//     path flashes it; the nRF52840 parks in its UF2 bootloader the same way. The ROM
+//     bootloader can't be erased, so this needs no bootloader of ours. A power cycle
+//     clears the counter and boots the app again, as on the nRF52840.
+
+#include <Arduino.h>
+#include <esp_attr.h>
+#include <esp_system.h>
+#include <esp_task_wdt.h>
+#include <soc/rtc_cntl_reg.h>
+
+namespace SafeBootWatchdog {
+
+    static constexpr uint8_t BOOT_FAIL_THRESHOLD = 3;
+    static constexpr uint32_t WDT_TIMEOUT_SECONDS = 15;
+    static constexpr uint32_t RTC_BOOT_MAGIC = 0xB0075E35UL;
+
+    // Internal linkage, as on the nRF52840: only blinky-things.ino includes this header.
+    static bool wdtStarted_ = false;
+    static uint8_t bootCount_ = 0;
+    struct RtcBootRecord {
+        uint32_t magic;
+        uint32_t count;     // boots since the last markStable() (or power-on)
+    };
+    RTC_NOINIT_ATTR static RtcBootRecord rtcBoot_;
+
+    // The nRF52840 bootloader's app-handshake counter has no ROM counterpart.
+    inline void clearBootAttemptCounter() {}
+
+    // Park in ROM download mode (USB Serial/JTAG) until flashed or power-cycled. Never returns.
+    inline void enterRecoveryBootloader() {
+        Serial.println(F("[BOOT] SafeBootWatchdog: entering ROM download mode for recovery"));
+        Serial.flush();
+        REG_WRITE(RTC_CNTL_OPTION1_REG, RTC_CNTL_FORCE_DOWNLOAD_BOOT);
+        esp_restart();
+    }
+
+    inline void feed() {
+        if (wdtStarted_) esp_task_wdt_reset();
+    }
+
+    inline void begin() {
+        if (esp_reset_reason() == ESP_RST_POWERON || rtcBoot_.magic != RTC_BOOT_MAGIC) {
+            rtcBoot_.magic = RTC_BOOT_MAGIC;
+            rtcBoot_.count = 0;
+        }
+        // As on the nRF52840: the count read is the boots before this one that never
+        // reached markStable(); at the threshold, recover; else count this boot first.
+        bootCount_ = rtcBoot_.count > 255 ? 255 : static_cast<uint8_t>(rtcBoot_.count);
+        if (bootCount_ >= BOOT_FAIL_THRESHOLD) {
+            rtcBoot_.count = 0;  // the boot after recovery starts fresh
+            enterRecoveryBootloader();
+        }
+        rtcBoot_.count = bootCount_ + 1U;
+
+        // The core starts the task watchdog (idle task of core 0, 5 s). Keep that, and
+        // watch the loop task too, with a reset on timeout.
+        esp_task_wdt_config_t cfg = {};
+        cfg.timeout_ms = WDT_TIMEOUT_SECONDS * 1000UL;
+        cfg.idle_core_mask = 1U << 0;
+        cfg.trigger_panic = true;
+        esp_err_t err = esp_task_wdt_reconfigure(&cfg);
+        if (err == ESP_ERR_INVALID_STATE) err = esp_task_wdt_init(&cfg);
+        if (err == ESP_OK) err = esp_task_wdt_add(nullptr);  // setup() runs on the loop task
+        wdtStarted_ = (err == ESP_OK);
+        if (!wdtStarted_) {
+            Serial.print(F("[FALLBACK] SafeBootWatchdog: task watchdog not armed (err="));
+            Serial.print(static_cast<int>(err));
+            Serial.println(F("): a hung loop will not reset the chip"));
+        }
+    }
+
+    // Clears the boot counter: this boot is good (deferred to 60 s of uptime by loop()).
+    inline void markStable() {
+        rtcBoot_.count = 0;
+    }
+
+    inline uint8_t getBootCount() { return bootCount_; }
+    inline bool isWdtActive() { return wdtStarted_; }
+
+}  // namespace SafeBootWatchdog
+
 #else
 
 // Stub for non-nRF52 platforms
@@ -325,4 +416,4 @@ namespace SafeBootWatchdog {
     inline bool isWdtActive() { return false; }
 }
 
-#endif  // ARDUINO_ARCH_NRF52
+#endif  // ARDUINO_ARCH_NRF52 / ESP32

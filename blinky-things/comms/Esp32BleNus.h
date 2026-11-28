@@ -19,9 +19,9 @@ class Esp32BleNus : public Print {
 public:
     using LineCallback = void(*)(const char* line);
 
-    /// Initialize NUS server and start advertising.
-    /// Call after NimBLEDevice::init().
-    void begin();
+    /// Initialize NUS server and start advertising under `name` (the nRF52840's
+    /// "Blinky-<deviceId>-<sn2>" / "Blinky-<sn4>" scheme, built by the sketch).
+    void begin(const char* name);
 
     /// Drain TX buffer (call from loop).
     void update();
@@ -44,6 +44,7 @@ private:
     void onDisconnect(uint16_t connId);
     void onRxData(const uint8_t* data, size_t len);
     void drainTxBuffer();
+    void runQueuedCommands();
 
     NimBLEServer* server_ = nullptr;
     NimBLECharacteristic* txChar_ = nullptr;  // Notify (device → central)
@@ -55,6 +56,17 @@ private:
     static const size_t LINE_BUF_SIZE = 768;
     char lineBuf_[LINE_BUF_SIZE];
     size_t lineLen_ = 0;
+
+    // Command queue: NimBLE host task -> loop task, as BleNus on the nRF52840 (#173).
+    // Lines run in update() on the loop task: the console isn't thread-safe, and a long
+    // reply on the host task's stack is what reset the nRF52840 hat. One producer, one
+    // consumer; the indices are published with memory barriers.
+    static const uint8_t CMD_QUEUE_DEPTH = 4;
+    char cmdQueue_[CMD_QUEUE_DEPTH][LINE_BUF_SIZE];
+    volatile uint8_t cmdHead_ = 0;
+    volatile uint8_t cmdTail_ = 0;
+    volatile uint32_t cmdDropped_ = 0;
+    uint32_t cmdDroppedReported_ = 0;
 
     // TX ring buffer
     static const size_t TX_BUF_SIZE = 4096;

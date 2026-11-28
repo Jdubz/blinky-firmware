@@ -2,8 +2,12 @@
 
 #include <Arduino.h>
 
-// The native nRF52840 core with TinyUSB (not host builds, not ESP32).
+// The native nRF52840 core with TinyUSB, and the ESP32-S3 with its console on the
+// USB Serial/JTAG peripheral (HWCDC; not host builds).
 #if defined(USE_TINYUSB) && defined(NRF52840_XXAA)
+#define BLINKY_SERIAL_OUT 1
+#elif defined(ARDUINO_ARCH_ESP32) && defined(ARDUINO_USB_MODE) && defined(ARDUINO_USB_CDC_ON_BOOT) && \
+    ARDUINO_USB_MODE == 1 && ARDUINO_USB_CDC_ON_BOOT == 1
 #define BLINKY_SERIAL_OUT 1
 #else
 #define BLINKY_SERIAL_OUT 0
@@ -47,6 +51,11 @@
  *     (Adafruit_USBD_CDC::write() returns 0 then).
  *
  * Before begin() (most of setup()) writes go straight to Serial.
+ *
+ * ESP32-S3 (HWCDC, the USB Serial/JTAG console): the same ring and drain task.
+ * HWCDC::write() waits up to 100 ms per chunk, and up to ~2 s in all, while the
+ * host isn't reading; the drain task writes only what availableForWrite() says
+ * fits, so it doesn't wait either. "Host attached" is HWCDC::isConnected().
  */
 class SerialOut : public Print {
 public:

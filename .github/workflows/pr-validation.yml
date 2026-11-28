@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       audio: ${{ steps.diff.outputs.audio }}
+      firmware: ${{ steps.diff.outputs.firmware }}
     steps:
     - name: Checkout repository
       uses: actions/checkout@v5
@@ -47,12 +48,26 @@ jobs:
         else
           echo "no base to diff against: run everything"
           echo "audio=true" >> "$GITHUB_OUTPUT"
+          echo "firmware=true" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         # --no-renames: a move lists both paths, so moving a file out of a watched tree still
         # runs the trackers.
         git diff --name-only --no-renames "$range" > changed.txt
         echo "changed ($range):"; cat changed.txt
+        # The ESP32-S3 compile runs when a firmware path changed: tools/firmware_paths.json
+        # (the list the box's staging runner and release.yml judge by; a path ending in / is a
+        # prefix), plus this workflow.
+        fw=$(python3 - <<'PY'
+        import json
+        paths = json.load(open("tools/firmware_paths.json"))["paths"] + [".github/workflows/pr-validation.yml"]
+        changed = [l.strip() for l in open("changed.txt") if l.strip()]
+        hit = [c for c in changed if any(c == p or (p.endswith("/") and c.startswith(p)) for p in paths)]
+        print("true" if hit else "false")
+        PY
+        )
+        echo "firmware=$fw" >> "$GITHUB_OUTPUT"
+        echo "firmware paths changed: $fw"
         # What the tracker harnesses compile (g++ -MM of tracker_harness.cpp, AudioTracker,
         # SharedSpectralAnalysis, AdaptiveMic, BlinkyAssert; SerialOut.h since #85), their scripts, the TFLite pin
         # the NN harness builds against, the corpus they replay (and .gitmodules, which decides
@@ -109,6 +124,39 @@ jobs:
 
     - name: Compile sketch (scripts/build.sh, as releases do)
       run: bash scripts/build.sh --build 0
+
+  # The XIAO ESP32-S3 build (next gen, #50; docs/NEXTGEN_ESP32S3_PLAN.md) under its own
+  # pinned toolchain (tools/firmware_toolchain_esp32s3.json, .arduino-esp32s3), so the S3
+  # branches can't rot again. Only when a firmware path changed (job `changes`); runs if
+  # that job failed, so a broken diff can't skip it.
+  compile-esp32s3:
+    name: Compile Firmware (ESP32-S3)
+    runs-on: ubuntu-latest
+    needs: changes
+    # Heavy: skipped on a draft PR (see `on:`).
+    if: ${{ always() && github.event.pull_request.draft != true && (needs.changes.result != 'success' || needs.changes.outputs.firmware == 'true') }}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+
+    - name: Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v2
+      with:
+        version: 1.3.1   # = tools/firmware_toolchain_esp32s3.json arduino_cli
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    # ~1 min (a cache of the installed toolchain took as long to restore).
+    - name: Install pinned ESP32-S3 toolchain
+      run: bash scripts/setup_toolchain.sh --target esp32s3
+
+    - name: Compile sketch (scripts/build.sh --esp32, as releases do)
+      run: bash scripts/build.sh --esp32 --build 0
+
 
   cppcheck:
     name: Static Analysis (cppcheck)
